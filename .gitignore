@@ -1,0 +1,12 @@
+ref/
+firmware/
+assets/private/
+tools/.venv/
+__pycache__/
+.DS_Store
+CLAUDE.md
+
+# VitePress docs site
+node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/

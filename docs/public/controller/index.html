@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Triki Web Controller</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #171c24;
+    --panel-2: #1f2630;
+    --line: #2a3340;
+    --fg: #e6edf3;
+    --muted: #8b98a6;
+    --accent: #57d2a0;
+    --accent-dim: #2f6b54;
+    --warn: #e0b341;
+    --bad: #e0556b;
+    --x: #ff6b6b;
+    --y: #6bd46b;
+    --z: #6b9bff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    padding: 16px;
+    max-width: 980px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  h1 small { color: var(--muted); font-weight: 400; font-size: 12px; }
+  a { color: var(--accent); }
+
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    margin-bottom: 14px;
+  }
+  header .spacer { flex: 1 1 auto; }
+
+  button {
+    font: inherit; color: var(--fg);
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 12px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent-dim); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent-dim); border-color: var(--accent); }
+  button.on { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--line);
+    color: var(--muted); font-size: 12px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .pill.idle  .dot { background: var(--muted); }
+  .pill.busy  .dot { background: var(--warn); animation: blink 1s infinite; }
+  .pill.live  .dot { background: var(--accent); }
+  .pill.err   .dot { background: var(--bad); }
+  @keyframes blink { 50% { opacity: .3; } }
+
+  #unsupported {
+    display: none; background: #2a1d1d; border: 1px solid var(--bad);
+    color: #f3c9cf; border-radius: 10px; padding: 12px 14px; margin-bottom: 14px;
+  }
+
+  /* Orientation panel twice the width of the accel/gyro panel */
+  .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px;
+  }
+  .panel h2 {
+    font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 10px; font-weight: 600;
+  }
+
+  /* 3D scene — flat cylinder (bottle-cap) model, built in JS */
+  .scene { perspective: 900px; height: 430px; display: grid; place-items: center; }
+  .model { position: relative; width: 0; height: 0; transform-style: preserve-3d; }
+  /* axis of the disc points along the model Z; rotateX lays the Y-built cylinder flat,
+     scale3d enlarges the whole cap (render() overwrites .model's transform each frame,
+     so the scale lives here on .cap instead) */
+  .cap   { position: relative; transform-style: preserve-3d;
+           transform: rotateX(90deg) scale3d(1.85, 1.85, 1.85); }
+  .cap > * { position: absolute; transform-style: preserve-3d; backface-visibility: hidden; }
+
+  .disc {
+    width: 120px; height: 120px; margin: -60px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,.22);
+  }
+  /* .disc.top = BACK face (away from camera at rest): green, Żabka "Ż" */
+  .disc.top    { background: radial-gradient(circle at 38% 32%, #5fce97, #3fae79 68%, #2f8e69);
+                 transform: rotateX( 90deg) translateZ(11px); }
+  /* .disc.bottom = FRONT face (toward camera at rest): grey, Triki "T" */
+  .disc.bottom { background: radial-gradient(circle at 38% 32%, #d9dee4, #aab2bc 68%, #899099);
+                 transform: rotateX(-90deg) translateZ(11px); }
+
+  .seg { backface-visibility: hidden; } /* size/transform/background set in JS */
+
+  /* brand letter centred on a disc face — also serves as the rotation reference */
+  .glyph {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    font: 800 64px/1 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+    backface-visibility: hidden; pointer-events: none; user-select: none;
+  }
+  .glyph.t { color: #485460; }              /* dark grey on the silver front */
+  .glyph.z { color: #eafff5;                /* light on the green back        */
+             text-shadow: 0 1px 2px rgba(0,0,0,.25);
+             transform: rotateZ(180deg); }  /* back face is X-flipped → upright the Ż */
+
+  .rpy { display: flex; justify-content: space-around; margin-top: 8px;
+         color: var(--muted); font-size: 12px; }
+  .rpy b { color: var(--fg); font-variant-numeric: tabular-nums; }
+
+  /* readouts */
+  table.read { width: 100%; border-collapse: collapse; }
+  table.read th { text-align: left; color: var(--muted); font-weight: 500;
+                  font-size: 11px; padding: 2px 0; }
+  table.read td { padding: 4px 0; vertical-align: middle; }
+  .axis { width: 16px; font-weight: 700; }
+  .axis.x { color: var(--x); } .axis.y { color: var(--y); } .axis.z { color: var(--z); }
+  .num { font-variant-numeric: tabular-nums; width: 78px; text-align: right;
+         padding-right: 10px; }
+  .bar { position: relative; height: 8px; background: var(--panel-2);
+         border-radius: 4px; overflow: hidden; }
+  .bar > i { position: absolute; top: 0; bottom: 0; left: 50%;
+             background: var(--accent); width: 0; }
+  .bar > .mid { position: absolute; left: 50%; top: 0; bottom: 0;
+                width: 1px; background: var(--line); }
+
+  /* accelerometer stacked above gyroscope */
+  .two { display: grid; grid-template-columns: 1fr; gap: 14px; }
+
+  details { margin-top: 14px; }
+  summary { cursor: pointer; color: var(--muted); }
+  pre#log {
+    background: #0b0e12; border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px; overflow: auto; max-height: 180px; margin: 8px 0 0;
+    font-size: 12px; color: #aeb9c4;
+  }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Triki Web Controller <small>· Web Bluetooth · orientation visualizer</small></h1>
+</header>
+
+<div id="unsupported">
+  <b>Web Bluetooth is not available in this browser.</b>
+  Use desktop <b>Chrome</b>, <b>Edge</b> or <b>Opera</b> over <code>https://</code> or
+  <code>http://localhost</code> (not <code>file://</code>). Safari and Firefox do not
+  implement Web Bluetooth.
+</div>
+
+<header>
+  <button id="connect" class="primary">Connect</button>
+  <button id="disconnect" disabled>Disconnect</button>
+  <button id="led" disabled>LED</button>
+  <button id="reset" disabled>Reset orientation</button>
+  <span class="spacer"></span>
+  <span id="status" class="pill idle"><span class="dot"></span><span id="statusText">idle</span></span>
+  <span id="hz" class="pill idle"><span class="dot"></span><span id="hzText">— Hz</span></span>
+</header>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Orientation</h2>
+    <div class="scene">
+      <div class="model" id="model">
+        <div class="cap" id="cap">
+          <!-- 24 rim segments injected by buildCap() -->
+          <div class="disc bottom"><span class="glyph t">T</span></div>
+          <div class="disc top"><span class="glyph z">Ż</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="rpy">
+      <span>roll <b id="roll">0°</b></span>
+      <span>pitch <b id="pitch">0°</b></span>
+      <span>yaw <b id="yaw">0°</b></span>
+    </div>
+  </div>
+
+  <div class="panel two">
+    <div>
+      <h2>Accelerometer (g)</h2>
+      <table class="read" id="accelTable"></table>
+    </div>
+    <div>
+      <h2>Gyroscope (°/s)</h2>
+      <table class="read" id="gyroTable"></table>
+    </div>
+  </div>
+</div>
+
+<details>
+  <summary>Raw frame log</summary>
+  <pre id="log"></pre>
+</details>
+
+<p class="hint">
+  Lay the token flat → the Z accel axis should read ≈ <b>+1.00 g</b>. Yaw drifts over
+  time (6-axis fusion, no magnetometer) — use <b>Reset orientation</b> to re-zero.
+  Only one BLE central can hold the token at a time: close any running bleak script first.
+</p>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Constants — mirror tools/ble_imu_stream.py
+// ---------------------------------------------------------------------------
+const NUS  = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const RX   = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // write / write-no-response
+const TX   = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // notify
+const CTRL = "6e400004-b5a3-f393-e0a9-e50e24dcca9e"; // 1-bit green LED
+
+const START       = Uint8Array.of(0x20, 0x10, 0x00, 0xD0, 0x07, 0x68, 0x00, 0x03);
+const ACCEL_SCALE = 2048.0;  // LSB per g (verified: flat token reads +2048 = 1 g)
+
+// Gyro sensitivity (LSB per °/s). The old 131.0 was an MPU-6050 ±250 dps value
+// carried over from ref/ notes and never checked against a real rotation — it made
+// the model under-rotate ~9-12x. The LSM6DSL appears to run at ±2000 dps full scale
+// (70 mdps/LSB → 14.286 LSB/°/s; also consistent with the ±700°/s seen on shakes).
+// Tunable at runtime: __setGyroScale(v). Calibrate by rotating exactly 360° about
+// one axis and nudging until yaw reads ~360°.
+let gyroScale = 14.286;      // LSM6DSL ±2000 dps
+
+const HDR0 = 0x22, HDR1 = 0x00;
+const FRAME_LEN = 14;
+
+// Display ranges for the bars
+const ACCEL_RANGE = 2.0;     // ±2 g
+const GYRO_RANGE  = 500.0;   // ±500 °/s (bars clamp beyond)
+
+// ---------------------------------------------------------------------------
+// DOM helpers
+// ---------------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const els = {
+  connect: $("connect"), disconnect: $("disconnect"), led: $("led"), reset: $("reset"),
+  status: $("status"), statusText: $("statusText"),
+  hz: $("hz"), hzText: $("hzText"),
+  model: $("model"), cap: $("cap"), roll: $("roll"), pitch: $("pitch"), yaw: $("yaw"),
+  log: $("log"),
+};
+
+// Build the flat-cylinder (bottle-cap) model: 24 rim segments around a Y-axis cylinder
+// (the .cap wrapper's rotateX(90deg) then lays the axis along model Z). One segment is
+// coloured as an index so rotation is unambiguous.
+function buildCap() {
+  const N = 24, R = 60, T = 22;
+  const apothem = R * Math.cos(Math.PI / N);
+  const W = 2 * R * Math.sin(Math.PI / N) + 0.6; // chord + slight overlap to hide seams
+  for (let i = 0; i < N; i++) {
+    const seg = document.createElement("div");
+    seg.className = "seg";
+    seg.style.width = W + "px";
+    seg.style.height = T + "px";
+    seg.style.marginLeft = (-W / 2) + "px";
+    seg.style.marginTop = (-T / 2) + "px";
+    seg.style.transform = `rotateY(${i * 360 / N}deg) translateZ(${apothem}px)`;
+    seg.style.background = i % 2 ? "#7e868f" : "#9aa2ac"; // grey crimped-edge stripes
+    els.cap.insertBefore(seg, els.cap.firstChild);
+  }
+}
+buildCap();
+
+function buildAxisRows(table) {
+  const rows = {};
+  for (const a of ["x", "y", "z"]) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      `<td class="axis ${a}">${a.toUpperCase()}</td>` +
+      `<td class="num" data-num>0.00</td>` +
+      `<td><div class="bar"><div class="mid"></div><i data-fill></i></div></td>`;
+    table.appendChild(tr);
+    rows[a] = { num: tr.querySelector("[data-num]"), fill: tr.querySelector("[data-fill]") };
+  }
+  return rows;
+}
+const accelRows = buildAxisRows($("accelTable"));
+const gyroRows  = buildAxisRows($("gyroTable"));
+
+function setBar(fill, value, range) {
+  // Bar grows from the centre line; left for negative, right for positive.
+  const frac = Math.max(-1, Math.min(1, value / range));
+  const halfPct = 50 * Math.abs(frac);
+  fill.style.width = halfPct + "%";
+  if (frac >= 0) { fill.style.left = "50%"; fill.style.right = "auto"; }
+  else { fill.style.left = "auto"; fill.style.right = "50%"; }
+}
+
+function setStatus(cls, text) {
+  els.status.className = "pill " + cls;
+  els.statusText.textContent = text;
+}
+
+function log(line) {
+  els.log.textContent = (line + "\n" + els.log.textContent).slice(0, 4000);
+}
+
+// ---------------------------------------------------------------------------
+// Madgwick AHRS — 6-axis (gyro + accel, no magnetometer)
+// ---------------------------------------------------------------------------
+const madgwick = (() => {
+  let q = [1, 0, 0, 0]; // w, x, y, z
+  const beta = 0.08;
+  const DEG2RAD = Math.PI / 180;
+
+  function reset() { q = [1, 0, 0, 0]; }
+
+  // gx,gy,gz in °/s ; ax,ay,az in g ; dt in seconds
+  function update(gxDeg, gyDeg, gzDeg, ax, ay, az, dt) {
+    let [q0, q1, q2, q3] = q;
+    const gx = gxDeg * DEG2RAD, gy = gyDeg * DEG2RAD, gz = gzDeg * DEG2RAD;
+
+    let qDot1 = 0.5 * (-q1 * gx - q2 * gy - q3 * gz);
+    let qDot2 = 0.5 * ( q0 * gx + q2 * gz - q3 * gy);
+    let qDot3 = 0.5 * ( q0 * gy - q1 * gz + q3 * gx);
+    let qDot4 = 0.5 * ( q0 * gz + q1 * gy - q2 * gx);
+
+    if (!(ax === 0 && ay === 0 && az === 0)) {
+      let rn = 1 / Math.hypot(ax, ay, az);
+      ax *= rn; ay *= rn; az *= rn;
+
+      const _2q0 = 2*q0, _2q1 = 2*q1, _2q2 = 2*q2, _2q3 = 2*q3;
+      const _4q0 = 4*q0, _4q1 = 4*q1, _4q2 = 4*q2, _8q1 = 8*q1, _8q2 = 8*q2;
+      const q0q0 = q0*q0, q1q1 = q1*q1, q2q2 = q2*q2, q3q3 = q3*q3;
+
+      let s0 = _4q0*q2q2 + _2q2*ax + _4q0*q1q1 - _2q1*ay;
+      let s1 = _4q1*q3q3 - _2q3*ax + 4*q0q0*q1 - _2q0*ay - _4q1 + _8q1*q1q1 + _8q1*q2q2 + _4q1*az;
+      let s2 = 4*q0q0*q2 + _2q0*ax + _4q2*q3q3 - _2q3*ay - _4q2 + _8q2*q1q1 + _8q2*q2q2 + _4q2*az;
+      let s3 = 4*q1q1*q3 - _2q1*ax + 4*q2q2*q3 - _2q2*ay;
+      rn = 1 / Math.hypot(s0, s1, s2, s3);
+      s0 *= rn; s1 *= rn; s2 *= rn; s3 *= rn;
+
+      qDot1 -= beta * s0; qDot2 -= beta * s1; qDot3 -= beta * s2; qDot4 -= beta * s3;
+    }
+
+    q0 += qDot1 * dt; q1 += qDot2 * dt; q2 += qDot3 * dt; q3 += qDot4 * dt;
+    const rn = 1 / Math.hypot(q0, q1, q2, q3);
+    q = [q0*rn, q1*rn, q2*rn, q3*rn];
+  }
+
+  function quat() { return q; }
+
+  // Tait-Bryan angles in degrees
+  function euler() {
+    const [w, x, y, z] = q;
+    const roll  = Math.atan2(2*(w*x + y*z), 1 - 2*(x*x + y*y));
+    const pitch = Math.asin(Math.max(-1, Math.min(1, 2*(w*y - z*x))));
+    const yaw   = Math.atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z));
+    const R = 180 / Math.PI;
+    return { roll: roll*R, pitch: pitch*R, yaw: yaw*R };
+  }
+
+  return { reset, update, quat, euler };
+})();
+
+// quaternion -> CSS matrix3d (column-major 4x4)
+function quatToMatrix3d([w, x, y, z]) {
+  const r00 = 1 - 2*(y*y + z*z), r01 = 2*(x*y - w*z),     r02 = 2*(x*z + w*y);
+  const r10 = 2*(x*y + w*z),     r11 = 1 - 2*(x*x + z*z), r12 = 2*(y*z - w*x);
+  const r20 = 2*(x*z - w*y),     r21 = 2*(y*z + w*x),     r22 = 1 - 2*(x*x + y*y);
+  // column-major: col0, col1, col2, col3
+  return `matrix3d(${r00},${r10},${r20},0, ${r01},${r11},${r21},0, ${r02},${r12},${r22},0, 0,0,0,1)`;
+}
+
+// ---------------------------------------------------------------------------
+// Frame parser — port of ble_imu_stream.py on_tx()
+// ---------------------------------------------------------------------------
+let buf = new Uint8Array(0);
+
+function append(chunk) {
+  const merged = new Uint8Array(buf.length + chunk.length);
+  merged.set(buf, 0);
+  merged.set(chunk, buf.length);
+  buf = merged;
+}
+
+function findHeader(arr) {
+  for (let i = 0; i + 1 < arr.length; i++) {
+    if (arr[i] === HDR0 && arr[i + 1] === HDR1) return i;
+  }
+  return -1;
+}
+
+let latest = null;      // {gx,gy,gz,ax,ay,az, raw}
+let lastFrameTs = 0;    // performance.now() of the previous decoded frame
+
+function parse() {
+  while (true) {
+    const j = findHeader(buf);
+    if (j < 0) {
+      if (buf.length > 64) buf = buf.slice(buf.length - 1); // keep last byte (split header)
+      break;
+    }
+    if (j > 0) buf = buf.slice(j);                          // drop garbage before header
+    if (buf.length < FRAME_LEN) break;
+    const frame = buf.slice(0, FRAME_LEN);
+    buf = buf.slice(FRAME_LEN);
+    decodeFrame(frame);
+  }
+}
+
+function decodeFrame(frame) {
+  const dv = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
+  const gxRaw = dv.getInt16(2,  true), gyRaw = dv.getInt16(4,  true), gzRaw = dv.getInt16(6,  true);
+  const axRaw = dv.getInt16(8,  true), ayRaw = dv.getInt16(10, true), azRaw = dv.getInt16(12, true);
+  latest = {
+    gx: gxRaw / gyroScale,   gy: gyRaw / gyroScale,   gz: gzRaw / gyroScale,
+    ax: axRaw / ACCEL_SCALE, ay: ayRaw / ACCEL_SCALE, az: azRaw / ACCEL_SCALE,
+    raw: frame,
+  };
+
+  // Integrate orientation at the real frame rate (~104 Hz), not the render rate.
+  const now = performance.now();
+  let dt = lastFrameTs ? (now - lastFrameTs) / 1000 : 1 / 104;
+  lastFrameTs = now;
+  if (dt > 0.2) dt = 0.2; // guard against tab-switch gaps
+  madgwick.update(latest.gx, latest.gy, latest.gz, latest.ax, latest.ay, latest.az, dt);
+
+  countFrame();
+}
+
+// Expose a dev hook to feed synthetic frames without hardware:
+//   __feedFrame("2200 0000 0000 0000 0000 0000 0008")  // ~1g on Z
+window.__feedFrame = (hex) => { append(Uint8Array.from(hex.replace(/\s+/g, "").match(/../g).map(b => parseInt(b, 16)))); parse(); };
+
+// Live gyro-scale calibration: rotate exactly 360° about one axis, then nudge until
+// yaw reads ~360°. Larger value = slower model; smaller = faster.
+window.__setGyroScale = (v) => { gyroScale = +v; console.log("gyroScale =", gyroScale); };
+window.__gyroScale = () => gyroScale;
+
+// ---------------------------------------------------------------------------
+// Rate estimate
+// ---------------------------------------------------------------------------
+let frameTimes = [];
+function countFrame() {
+  const now = performance.now();
+  frameTimes.push(now);
+  while (frameTimes.length && now - frameTimes[0] > 1000) frameTimes.shift();
+}
+function currentHz() { return frameTimes.length; }
+
+// ---------------------------------------------------------------------------
+// Render loop — DOM only; fusion already ran per-frame in decodeFrame()
+// ---------------------------------------------------------------------------
+function render() {
+  if (latest) {
+    const f = latest;
+    accelRows.x.num.textContent = f.ax.toFixed(2);
+    accelRows.y.num.textContent = f.ay.toFixed(2);
+    accelRows.z.num.textContent = f.az.toFixed(2);
+    setBar(accelRows.x.fill, f.ax, ACCEL_RANGE);
+    setBar(accelRows.y.fill, f.ay, ACCEL_RANGE);
+    setBar(accelRows.z.fill, f.az, ACCEL_RANGE);
+
+    gyroRows.x.num.textContent = f.gx.toFixed(1);
+    gyroRows.y.num.textContent = f.gy.toFixed(1);
+    gyroRows.z.num.textContent = f.gz.toFixed(1);
+    setBar(gyroRows.x.fill, f.gx, GYRO_RANGE);
+    setBar(gyroRows.y.fill, f.gy, GYRO_RANGE);
+    setBar(gyroRows.z.fill, f.gz, GYRO_RANGE);
+
+    els.model.style.transform = quatToMatrix3d(madgwick.quat());
+
+    const e = madgwick.euler();
+    els.roll.textContent  = e.roll.toFixed(0)  + "°";
+    els.pitch.textContent = e.pitch.toFixed(0) + "°";
+    els.yaw.textContent   = e.yaw.toFixed(0)   + "°";
+  }
+
+  const hz = currentHz();
+  els.hzText.textContent = (hz ? hz : "—") + " Hz";
+  els.hz.className = "pill " + (hz ? "live" : "idle");
+
+  requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+
+// ---------------------------------------------------------------------------
+// BLE
+// ---------------------------------------------------------------------------
+let device = null, gatt = null, rxChar = null, txChar = null, ctrlChar = null;
+let ledOn = false;
+
+if (!navigator.bluetooth) {
+  $("unsupported").style.display = "block";
+  els.connect.disabled = true;
+}
+
+async function connect() {
+  try {
+    setStatus("busy", "requesting device…");
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: "TRIKI" }, { namePrefix: "Triki" }],
+      optionalServices: [NUS],
+    });
+    device.addEventListener("gattserverdisconnected", onDisconnected);
+
+    setStatus("busy", "connecting…");
+    gatt = await device.gatt.connect();
+    const svc = await gatt.getPrimaryService(NUS);
+    rxChar = await svc.getCharacteristic(RX);
+    txChar = await svc.getCharacteristic(TX);
+    try { ctrlChar = await svc.getCharacteristic(CTRL); } catch { ctrlChar = null; }
+
+    await txChar.startNotifications();
+    txChar.addEventListener("characteristicvaluechanged", onNotify);
+
+    await rxChar.writeValueWithoutResponse(START);
+    log("→ START " + hex(START));
+
+    setStatus("live", "streaming");
+    els.connect.disabled = true;
+    els.disconnect.disabled = false;
+    els.reset.disabled = false;
+    els.led.disabled = !ctrlChar;
+  } catch (e) {
+    setStatus("err", "error");
+    log("⚠ " + e.message);
+    cleanup();
+  }
+}
+
+function onNotify(ev) {
+  const v = ev.target.value; // DataView
+  const bytes = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+  append(bytes);
+  parse();
+  if (latest) log("← " + hex(latest.raw));
+}
+
+function onDisconnected() {
+  setStatus("idle", "disconnected");
+  log("• disconnected");
+  cleanup();
+}
+
+function disconnect() {
+  if (gatt && gatt.connected) gatt.disconnect(); // fires gattserverdisconnected
+  else onDisconnected();
+}
+
+function cleanup() {
+  rxChar = txChar = ctrlChar = gatt = null;
+  ledOn = false;
+  buf = new Uint8Array(0);
+  latest = null;
+  frameTimes = [];
+  lastFrameTs = 0;
+  els.connect.disabled = !navigator.bluetooth;
+  els.disconnect.disabled = true;
+  els.led.disabled = true;
+  els.reset.disabled = true;
+  els.led.classList.remove("on");
+}
+
+async function toggleLed() {
+  if (!ctrlChar) return;
+  ledOn = !ledOn;
+  try {
+    await ctrlChar.writeValue(Uint8Array.of(ledOn ? 0x01 : 0x00));
+    els.led.classList.toggle("on", ledOn);
+    log("→ LED " + (ledOn ? "on" : "off"));
+  } catch (e) {
+    ledOn = !ledOn;
+    log("⚠ LED: " + e.message);
+  }
+}
+
+function hex(arr) {
+  return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join(" ");
+}
+
+els.connect.addEventListener("click", connect);
+els.disconnect.addEventListener("click", disconnect);
+els.led.addEventListener("click", toggleLed);
+els.reset.addEventListener("click", () => { madgwick.reset(); log("• orientation reset"); });
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "triki-docs",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Triki BLE reverse-engineering — documentation site",
+  "scripts": {
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
+  },
+  "devDependencies": {
+    "vitepress": "^1.5.0"
+  }
+}

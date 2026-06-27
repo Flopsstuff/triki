@@ -1,0 +1,14 @@
+# Git LFS — large / binary files
+# Images
+*.jpg   filter=lfs diff=lfs merge=lfs -text
+*.jpeg  filter=lfs diff=lfs merge=lfs -text
+*.png   filter=lfs diff=lfs merge=lfs -text
+*.gif   filter=lfs diff=lfs merge=lfs -text
+*.webp  filter=lfs diff=lfs merge=lfs -text
+# Media
+*.mp4   filter=lfs diff=lfs merge=lfs -text
+# Firmware / dumps / archives
+*.bin   filter=lfs diff=lfs merge=lfs -text
+*.dat   filter=lfs diff=lfs merge=lfs -text
+*.hex   filter=lfs diff=lfs merge=lfs -text
+*.zip   filter=lfs diff=lfs merge=lfs -text
