@@ -12,7 +12,7 @@ motion sensors over BLE and reuse it as a **motion controller**.
 
 ## Demo
 
-<video src="https://github.com/Flopsstuff/triki/raw/main/assets/img.mp4" controls muted playsinline width="270"></video>
+https://github.com/user-attachments/assets/61ef9f09-5221-43e0-a817-9f42f8408c86
 
 > If the player doesn't load, [watch the clip directly](assets/img.mp4).
 
