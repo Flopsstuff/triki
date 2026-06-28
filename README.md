@@ -3,7 +3,7 @@
 ### ▶ [Live Web Bluetooth controller](https://flopsstuff.github.io/triki/controller/)
 
 Open it in **Chrome / Edge** to stream the token's motion straight from the browser and
-watch a live 3D orientation cube — no install.
+watch a live 3D orientation.
 
 Notes and tooling for the **Żabka Triki** (a.k.a. *Tiki*) — a collectible BLE token
 shaped like a bottle cap (crown cap), built around an **nRF52810** BLE SoC and an
