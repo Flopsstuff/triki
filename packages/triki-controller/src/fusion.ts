@@ -19,8 +19,8 @@ export interface EulerAngles {
 }
 
 /**
- * Common shape of an orientation filter. Both {@link MadgwickAHRS} and
- * {@link VqfAHRS} implement it, so the controller can swap algorithms at runtime.
+ * Common shape of an orientation filter. {@link MadgwickAHRS}, {@link VqfAHRS},
+ * and {@link AccelAHRS} implement it, so the controller can swap algorithms at runtime.
  * `update` takes gyro in deg/s and accel in g; `quaternion` returns `[w, x, y, z]`.
  */
 export interface OrientationFilter {
