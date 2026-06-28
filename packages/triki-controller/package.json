@@ -1,7 +1,7 @@
 {
   "name": "triki-controller",
   "version": "0.2.0",
-  "description": "Web Bluetooth driver for the Żabka Triki token (nRF52810 + LSM6DSL) — connect, stream the IMU, and read fused orientation (selectable Madgwick or VQF) in the browser to reuse the token as a motion controller.",
+  "description": "Driver for the Żabka Triki token (nRF52810 + LSM6DSL) — connect, stream the IMU, and read fused orientation (selectable Madgwick or VQF) to reuse the token as a motion controller. Web Bluetooth in the browser, or @abandonware/noble in Node.",
   "type": "module",
   "license": "MIT",
   "author": "Flopsstuff",
@@ -26,6 +26,8 @@
     "gyroscope",
     "accelerometer",
     "motion-controller",
+    "noble",
+    "nodejs",
     "triki",
     "zabka"
   ],
@@ -37,6 +39,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
     }
   },
   "files": [
@@ -60,6 +66,14 @@
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
     "vitest": "^4.1.9"
+  },
+  "peerDependencies": {
+    "@abandonware/noble": "^1.9.2-26"
+  },
+  "peerDependenciesMeta": {
+    "@abandonware/noble": {
+      "optional": true
+    }
   },
   "publishConfig": {
     "access": "public"

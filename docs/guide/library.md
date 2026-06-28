@@ -11,7 +11,9 @@ controller.
 
 - **npm:** [`triki-controller`](https://www.npmjs.com/package/triki-controller)
 - **Source + README:** [`packages/triki-controller`](https://github.com/Flopsstuff/triki/tree/main/packages/triki-controller#readme)
-- Zero runtime dependencies, ESM-only, ships its own `.d.ts`.
+- ESM-only, ships its own `.d.ts`. The browser core has **zero runtime dependencies**;
+  the optional Node transport uses `@abandonware/noble` (see
+  [Node.js](#nodejs-receive-outside-the-browser)).
 
 The visualizer page and this package share the same parsing and fusion math; the
 [BLE protocol](./ble-protocol) and [IMU streaming](./imu-streaming) pages are the
@@ -120,6 +122,7 @@ interface OrientationEvent {
 | `gyroScale` | `14.286` | gyro scale in LSB per deg/s (LSM6DSL ±2000 dps) |
 | `gyroBias` | `{0,0,0}` | per-axis gyro correction (deg/s) subtracted from every sample |
 | `accelBias` | `{0,0,0}` | per-axis accel correction (g) subtracted from every sample |
+| `transport` | Web Bluetooth | BLE transport; pass a `NobleTransport` (Node) or any `TrikiTransport` |
 
 | Member | Description |
 |---|---|
@@ -140,6 +143,63 @@ interface OrientationEvent {
 `connect()` rejects (after cleaning up) if pairing or the handshake fails, so wrap it in
 `try/catch` to surface picker errors. `reconnect()` reuses the cached device and throws
 if `connect()` was never called.
+
+## Node.js (receive outside the browser)
+
+Web Bluetooth only exists in the browser. To receive the token from a plain Node
+process, pass a **`NobleTransport`** — a transport backed by
+[`@abandonware/noble`](https://github.com/abandonware/noble) — from the
+`triki-controller/node` entry point. Everything else (events, fusion, `setLed`,
+`setRate`, `resetHeading`) behaves exactly as in the browser.
+
+```sh
+npm install triki-controller @abandonware/noble
+```
+
+```ts
+import { TrikiController, NobleTransport } from "triki-controller/node";
+
+const triki = new TrikiController({ transport: new NobleTransport() });
+
+triki.on("orientation", (o) => console.log(o.euler)); // { roll, pitch, yaw }
+await triki.connect(); // scans for a "TRIKI" token, connects, starts streaming
+```
+
+A runnable demo lives at
+[`packages/triki-controller/example/node.mjs`](https://github.com/Flopsstuff/triki/blob/main/packages/triki-controller/example/node.mjs).
+
+`@abandonware/noble` is an **optional peer dependency**: install it alongside
+`triki-controller` (as above). It is imported lazily, only when `connect()` runs, so
+`triki-controller` never pulls the native module on its own. On macOS the first run
+prompts the terminal (or your IDE) for Bluetooth access.
+
+**`new NobleTransport(options?)`:**
+
+| Option | Default | Meaning |
+|---|---|---|
+| `namePrefix` | `"TRIKI"` | match devices whose advertised name starts with this prefix |
+| `address` | — | match a specific BLE address instead of by name |
+| `noble` | `@abandonware/noble` | a noble-API-compatible module to use instead |
+
+::: warning Native build
+`@abandonware/noble` compiles a native addon, and its bundled `node-gyp` is old enough
+to fail on the newest Node releases. Use a current **Node LTS** (which has prebuilt
+binaries), or pass a drop-in fork through the `noble` option:
+
+```ts
+import noble from "@stoprocent/noble";
+const triki = new TrikiController({ transport: new NobleTransport({ noble }) });
+```
+:::
+
+### Custom transports
+
+`NobleTransport` and the browser `WebBluetoothTransport` both implement the small
+**`TrikiTransport`** interface (`connect`, `writeRx`, `writeCtrl`, `onFrame`,
+`onDisconnect`, `disconnect`, `hasLed`). Implement it yourself to drive the controller
+over any link — a WebSocket bridge, a serial dongle, or a replay of recorded frames —
+while reusing all of the parsing and fusion. The transport is a dumb NUS pipe; the
+controller owns the Triki protocol, so the protocol logic lives in exactly one place.
 
 ## Standalone primitives
 

@@ -1,5 +1,6 @@
 /** Public event payloads, the controller event map, and constructor options. */
 import type { Quaternion, EulerAngles } from "./fusion";
+import type { TrikiTransport } from "./transport";
 
 /** Connection lifecycle state. */
 export type ConnectionState = "disconnected" | "pairing" | "streaming";
@@ -76,4 +77,10 @@ export interface TrikiControllerOptions {
   gyroBias?: Vec3;
   /** Per-axis accel correction (g) subtracted from every sample. Default zeros. */
   accelBias?: Vec3;
+  /**
+   * BLE transport. Defaults to a `WebBluetoothTransport` (browser). Pass a
+   * `NobleTransport` (from `triki-controller/node`) to receive outside the browser,
+   * or any object implementing {@link TrikiTransport}.
+   */
+  transport?: TrikiTransport;
 }
