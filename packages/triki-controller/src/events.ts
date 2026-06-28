@@ -4,6 +4,12 @@ import type { Quaternion, EulerAngles } from "./fusion";
 /** Connection lifecycle state. */
 export type ConnectionState = "disconnected" | "pairing" | "streaming";
 
+/**
+ * Selectable orientation-fusion algorithm. `"accel"` is accelerometer-only tilt (no
+ * gyro, no yaw); `"none"` emits no `orientation` events at all.
+ */
+export type FusionAlgorithm = "madgwick" | "vqf" | "accel" | "none";
+
 /** A 3-component vector. */
 export interface Vec3 {
   x: number;
@@ -29,6 +35,8 @@ export interface OrientationEvent {
   quaternion: Quaternion;
   /** Tait-Bryan angles in degrees, heading offset applied. */
   euler: EulerAngles;
+  /** Which filter produced this sample (`"madgwick"` or `"vqf"`). */
+  algorithm: FusionAlgorithm;
   /** `performance.now()` timestamp in ms. */
   t: number;
 }
@@ -43,17 +51,29 @@ export interface TrikiEventMap {
   connectionchange: ConnectionState;
   /** Measured throughput in Hz (frames in the last 1000 ms), emitted ~once per second. */
   rate: number;
+  /** Battery level in percent (0–100), if the token exposes the Battery service. */
+  battery: number;
   /** Index signature required by the typed emitter. */
   [key: string]: unknown;
 }
 
 export interface TrikiControllerOptions {
-  /** Run Madgwick fusion and emit `orientation` events. Default `true`. */
-  fusion?: boolean;
+  /**
+   * Orientation fusion algorithm, controlling whether `orientation` events fire.
+   * `true` (default) ≡ `"madgwick"`; `false` ≡ `"none"`; or name an algorithm
+   * directly (`"madgwick"` | `"vqf"` | `"none"`).
+   */
+  fusion?: boolean | FusionAlgorithm;
   /** Initial IMU sample rate in Hz. Default 104. */
   rateHz?: number;
   /** Madgwick filter gain. Default 0.08. */
   beta?: number;
+  /** VQF accelerometer low-pass time constant in seconds. Default 2.0. */
+  tauAcc?: number;
   /** Gyro scale in LSB per deg/s. Default 14.286. */
   gyroScale?: number;
+  /** Per-axis gyro correction (deg/s) subtracted from every sample. Default zeros. */
+  gyroBias?: Vec3;
+  /** Per-axis accel correction (g) subtracted from every sample. Default zeros. */
+  accelBias?: Vec3;
 }

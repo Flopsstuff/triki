@@ -7,14 +7,16 @@
 import { TypedEmitter } from "./emitter";
 import { FrameParser } from "./parser";
 import type { RawFrame } from "./parser";
-import { MadgwickAHRS, quatMul, quatAboutZ, yawRadOf, eulerOf } from "./fusion";
-import type { Quaternion } from "./fusion";
+import { MadgwickAHRS, AccelAHRS, quatMul, quatAboutZ, yawRadOf, eulerOf } from "./fusion";
+import type { OrientationFilter, Quaternion } from "./fusion";
+import { VqfAHRS, DEFAULT_TAU_ACC } from "./vqf";
 import {
   NUS_SERVICE,
   NUS_RX,
   NUS_TX,
   NUS_CTRL,
   BATTERY_SERVICE,
+  BATTERY_LEVEL,
   DEFAULT_ACCEL_SCALE,
   DEFAULT_GYRO_SCALE,
   DEFAULT_RATE_HZ,
@@ -22,7 +24,22 @@ import {
   startCmd,
   ledCmd,
 } from "./protocol";
-import type { ConnectionState, TrikiControllerOptions, TrikiEventMap } from "./events";
+import type {
+  ConnectionState,
+  FusionAlgorithm,
+  TrikiControllerOptions,
+  TrikiEventMap,
+  Vec3,
+} from "./events";
+
+const ZERO_VEC3: Vec3 = { x: 0, y: 0, z: 0 };
+
+/** Resolve the `fusion` option: `true`→madgwick, `false`→none, string→passthrough. */
+function resolveFusion(opt: boolean | FusionAlgorithm | undefined): FusionAlgorithm {
+  if (opt === undefined || opt === true) return "madgwick";
+  if (opt === false) return "none";
+  return opt;
+}
 
 const RATE_WINDOW_MS = 1000;
 const MAX_DT_S = 0.2;
@@ -33,13 +50,19 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
   #rxChar: BluetoothRemoteGATTCharacteristic | null = null;
   #txChar: BluetoothRemoteGATTCharacteristic | null = null;
   #ctrlChar: BluetoothRemoteGATTCharacteristic | null = null;
+  #batteryChar: BluetoothRemoteGATTCharacteristic | null = null;
+  #battery: number | null = null;
 
   #parser = new FrameParser();
-  #madgwick: MadgwickAHRS | null;
-  #fusion: boolean;
+  #filter: OrientationFilter | null;
+  #algo: FusionAlgorithm;
+  #beta: number;
+  #tauAcc: number;
   #state: ConnectionState = "disconnected";
   #rateHz: number;
   #gyroScale: number;
+  #gyroBias: Vec3;
+  #accelBias: Vec3;
   #yawOffsetQ: Quaternion = [1, 0, 0, 0];
   #lastFrameTs = 0;
   #frameTimes: number[] = [];
@@ -47,10 +70,21 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
 
   constructor(options: TrikiControllerOptions = {}) {
     super();
-    this.#fusion = options.fusion ?? true;
+    this.#algo = resolveFusion(options.fusion);
     this.#rateHz = options.rateHz ?? DEFAULT_RATE_HZ;
     this.#gyroScale = options.gyroScale ?? DEFAULT_GYRO_SCALE;
-    this.#madgwick = this.#fusion ? new MadgwickAHRS({ beta: options.beta ?? DEFAULT_BETA }) : null;
+    this.#gyroBias = options.gyroBias ?? { ...ZERO_VEC3 };
+    this.#accelBias = options.accelBias ?? { ...ZERO_VEC3 };
+    this.#beta = options.beta ?? DEFAULT_BETA;
+    this.#tauAcc = options.tauAcc ?? DEFAULT_TAU_ACC;
+    this.#filter = this.#makeFilter(this.#algo);
+  }
+
+  #makeFilter(algo: FusionAlgorithm): OrientationFilter | null {
+    if (algo === "madgwick") return new MadgwickAHRS({ beta: this.#beta });
+    if (algo === "vqf") return new VqfAHRS({ tauAcc: this.#tauAcc });
+    if (algo === "accel") return new AccelAHRS();
+    return null;
   }
 
   /** True when Web Bluetooth is available (safe to call during SSR). */
@@ -78,9 +112,19 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
     return this.#ctrlChar !== null;
   }
 
-  /** The Madgwick filter, or `undefined` when fusion is disabled. */
-  get fusion(): MadgwickAHRS | undefined {
-    return this.#madgwick ?? undefined;
+  /** Last known battery level in percent, or `null` if not read yet. */
+  get battery(): number | null {
+    return this.#battery;
+  }
+
+  /** The active orientation filter, or `undefined` when fusion is disabled. */
+  get fusion(): OrientationFilter | undefined {
+    return this.#filter ?? undefined;
+  }
+
+  /** The active fusion algorithm. */
+  get fusionAlgorithm(): FusionAlgorithm {
+    return this.#algo;
   }
 
   /**
@@ -145,13 +189,49 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
 
   /** Re-zero the heading (yaw). No-op when fusion is disabled. Tilt stays absolute. */
   resetHeading(): void {
-    if (!this.#madgwick) return;
-    this.#yawOffsetQ = quatAboutZ(-yawRadOf(this.#madgwick.quaternion()));
+    if (!this.#filter) return;
+    this.#yawOffsetQ = quatAboutZ(-yawRadOf(this.#filter.quaternion()));
+  }
+
+  /**
+   * Switch the fusion algorithm at runtime. Rebuilds the filter and re-zeroes the
+   * heading; `"none"` stops `orientation` events (and `resetHeading` becomes a no-op).
+   */
+  setFusion(algo: FusionAlgorithm): void {
+    this.#algo = algo;
+    this.#filter = this.#makeFilter(algo);
+    this.#yawOffsetQ = [1, 0, 0, 0];
+    this.#lastFrameTs = 0;
+  }
+
+  /** Set the Madgwick filter gain. Stored, and applied live when Madgwick is active. */
+  setBeta(beta: number): void {
+    this.#beta = beta;
+    if (this.#filter instanceof MadgwickAHRS) this.#filter.beta = beta;
+  }
+
+  /**
+   * Set the VQF accel low-pass time constant (seconds). Stored, and applied live
+   * when VQF is active.
+   */
+  setTauAcc(tau: number): void {
+    this.#tauAcc = tau;
+    if (this.#filter instanceof VqfAHRS) this.#filter.setTauAcc(tau);
   }
 
   /** Runtime gyro-scale calibration (LSB per deg/s). */
   setGyroScale(scale: number): void {
     this.#gyroScale = scale;
+  }
+
+  /** Per-axis gyro correction (deg/s), subtracted from every sample. */
+  setGyroBias(bias: Vec3): void {
+    this.#gyroBias = bias;
+  }
+
+  /** Per-axis accel correction (g), subtracted from every sample. */
+  setAccelBias(bias: Vec3): void {
+    this.#accelBias = bias;
   }
 
   // --- internal ----------------------------------------------------------------
@@ -178,7 +258,37 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
     await this.#write(this.#rxChar, startCmd(this.#rateHz), true);
 
     this.#startRateTimer();
+    void this.#startBattery(); // async, best-effort; never blocks streaming
     this.#setState("streaming");
+  }
+
+  /** Read the battery level once and subscribe to updates, if the service exists. */
+  async #startBattery(): Promise<void> {
+    if (!this.#gatt) return;
+    try {
+      const svc = await this.#gatt.getPrimaryService(BATTERY_SERVICE);
+      this.#batteryChar = await svc.getCharacteristic(BATTERY_LEVEL);
+      this.#emitBattery(await this.#batteryChar.readValue());
+      try {
+        await this.#batteryChar.startNotifications();
+        this.#batteryChar.addEventListener("characteristicvaluechanged", this.#onBattery);
+      } catch {
+        this.#batteryChar = null; // notifications unsupported; the one-time read stands
+      }
+    } catch {
+      this.#batteryChar = null; // no Battery service on this token
+    }
+  }
+
+  #onBattery = (event: Event): void => {
+    const char = event.target as BluetoothRemoteGATTCharacteristic;
+    if (char.value) this.#emitBattery(char.value);
+  };
+
+  #emitBattery(view: DataView): void {
+    const pct = view.getUint8(0);
+    this.#battery = pct;
+    this.emit("battery", pct);
   }
 
   #onNotify = (event: Event): void => {
@@ -195,12 +305,13 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
   };
 
   #handleFrame(raw: RawFrame): void {
-    const gx = raw.gxRaw / this.#gyroScale;
-    const gy = raw.gyRaw / this.#gyroScale;
-    const gz = raw.gzRaw / this.#gyroScale;
-    const ax = raw.axRaw / DEFAULT_ACCEL_SCALE;
-    const ay = raw.ayRaw / DEFAULT_ACCEL_SCALE;
-    const az = raw.azRaw / DEFAULT_ACCEL_SCALE;
+    // Scale to physical units, then subtract the per-axis correction (bias) vectors.
+    const gx = raw.gxRaw / this.#gyroScale - this.#gyroBias.x;
+    const gy = raw.gyRaw / this.#gyroScale - this.#gyroBias.y;
+    const gz = raw.gzRaw / this.#gyroScale - this.#gyroBias.z;
+    const ax = raw.axRaw / DEFAULT_ACCEL_SCALE - this.#accelBias.x;
+    const ay = raw.ayRaw / DEFAULT_ACCEL_SCALE - this.#accelBias.y;
+    const az = raw.azRaw / DEFAULT_ACCEL_SCALE - this.#accelBias.z;
 
     const now = performance.now();
     this.#countFrame(now);
@@ -212,14 +323,14 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
       t: now,
     });
 
-    if (this.#madgwick) {
+    if (this.#filter) {
       // Integrate at the measured frame period (clamped to absorb tab-switch gaps).
       let dt = this.#lastFrameTs ? (now - this.#lastFrameTs) / 1000 : 1 / this.#rateHz;
       this.#lastFrameTs = now;
       if (dt > MAX_DT_S) dt = MAX_DT_S;
-      this.#madgwick.update(gx, gy, gz, ax, ay, az, dt);
-      const qd = quatMul(this.#yawOffsetQ, this.#madgwick.quaternion());
-      this.emit("orientation", { quaternion: qd, euler: eulerOf(qd), t: now });
+      this.#filter.update(gx, gy, gz, ax, ay, az, dt);
+      const qd = quatMul(this.#yawOffsetQ, this.#filter.quaternion());
+      this.emit("orientation", { quaternion: qd, euler: eulerOf(qd), algorithm: this.#algo, t: now });
     }
   }
 
@@ -259,6 +370,13 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
         /* ignore */
       }
     }
+    if (this.#batteryChar) {
+      try {
+        this.#batteryChar.removeEventListener("characteristicvaluechanged", this.#onBattery);
+      } catch {
+        /* ignore */
+      }
+    }
     if (this.#device) {
       try {
         this.#device.removeEventListener("gattserverdisconnected", this.#onDisconnected);
@@ -270,6 +388,8 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
     this.#rxChar = null;
     this.#txChar = null;
     this.#ctrlChar = null;
+    this.#batteryChar = null;
+    this.#battery = null;
     this.#gatt = null;
     // #device is retained so reconnect() can reuse it without the picker.
     this.#parser.reset();

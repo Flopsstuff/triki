@@ -57,13 +57,24 @@
          border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
   .sel:hover { border-color: var(--accent-dim); }
 
+  /* Fusion tuning knob (Madgwick β / VQF τ) — one slider, label swaps per algorithm */
+  .tune { display: inline-flex; align-items: center; gap: 8px;
+          padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px;
+          background: var(--panel-2); color: var(--muted); font-size: 12px; }
+  .tune.off { opacity: .45; }
+  .tune label { min-width: 1.4em; text-align: center; color: var(--fg); }
+  .tune .val { font-variant-numeric: tabular-nums; min-width: 3.4em; text-align: right; }
+  .tune input[type=range] { width: 104px; accent-color: var(--accent); cursor: pointer; }
+  .tune input[type=range]:disabled { cursor: default; }
+
+  .pills { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
   .pill {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 4px 10px; border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 8px; border-radius: 999px;
     background: var(--panel); border: 1px solid var(--line);
-    color: var(--muted); font-size: 12px;
+    color: var(--muted); font-size: 11px; line-height: 1.6;
   }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
   .pill.idle  .dot { background: var(--muted); }
   .pill.busy  .dot { background: var(--warn); animation: blink 1s infinite; }
   .pill.live  .dot { background: var(--accent); }
@@ -101,7 +112,7 @@
   .onboard b { color: var(--accent); font-weight: 600; }
 
   /* Orientation panel twice the width of the accel/gyro panel */
-  .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
+  .grid { display: grid; grid-template-columns: 3fr 2fr; gap: 14px; }
   @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
 
   .panel {
@@ -149,6 +160,35 @@
     font-size: 12px; color: #aeb9c4;
   }
   .hint { color: var(--muted); font-size: 12px; margin-top: 10px; }
+
+  /* Settings popup (correction vectors) */
+  #settings { line-height: 1; }
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, .55); z-index: 50;
+    display: none; align-items: center; justify-content: center; padding: 16px;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 20px; width: min(420px, 100%); box-shadow: 0 10px 40px rgba(0, 0, 0, .5);
+  }
+  .modal h2 {
+    font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 6px; font-weight: 600;
+  }
+  .modal p.sub { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+  .modal .group { margin-bottom: 14px; }
+  .modal .group > label { display: block; color: var(--fg); font-size: 12px; margin-bottom: 6px; }
+  .modal .axes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .modal .fld { display: flex; flex-direction: column; gap: 4px; }
+  .modal .fld .ax { font-size: 11px; font-weight: 700; }
+  .modal .fld .ax.x { color: var(--x); } .modal .fld .ax.y { color: var(--y); } .modal .fld .ax.z { color: var(--z); }
+  .modal input[type=number] {
+    font: inherit; width: 100%; color: var(--fg); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
+  }
+  .modal input[type=number]:focus { outline: none; border-color: var(--accent-dim); }
+  .modal .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 </style>
 </head>
 <body>
@@ -175,13 +215,21 @@
   <button id="led" disabled>LED</button>
   <button id="rate">1x</button>
   <button id="reset" disabled>Reset</button>
+  <select id="fusionSel" class="sel" title="Fusion algorithm">
+    <option value="madgwick">Madgwick</option>
+    <option value="vqf">VQF</option>
+    <option value="accel">Accel only</option>
+  </select>
+  <span id="tuneWrap" class="tune" title="Filter tuning">
+    <label id="tuneLabel" for="tune">β</label>
+    <input id="tune" type="range" min="0.01" max="0.5" step="0.005" value="0.08">
+    <span id="tuneVal" class="val">0.080</span>
+  </span>
   <select id="modelSel" class="sel" title="3D model">
     <option value="./triki_texture.glb">Triki</option>
     <option value="https://modelviewer.dev/shared-assets/models/Astronaut.glb">Astronaut</option>
   </select>
-  <span class="spacer"></span>
-  <span id="status" class="pill idle"><span class="dot"></span><span id="statusText">disconnected</span></span>
-  <span id="sig" class="pill idle"><span class="dot"></span><span id="sigText">—</span></span>
+  <button id="settings" title="Settings" aria-label="Settings">⚙</button>
 </header>
 
 <section class="onboard">
@@ -210,6 +258,11 @@
   </div>
 
   <div class="panel two">
+    <div class="pills">
+      <span id="status" class="pill idle"><span class="dot"></span><span id="statusText">disconnected</span></span>
+      <span id="sig" class="pill idle"><span class="dot"></span><span id="sigText">—</span></span>
+      <span id="batt" class="pill idle"><span class="dot"></span><span id="battText">—</span></span>
+    </div>
     <div>
       <h2>Accelerometer (g)</h2>
       <table class="read" id="accelTable"></table>
@@ -229,21 +282,54 @@
 <p class="hint">
   Lay the token flat → the Z accel axis should read ≈ <b>+1.00 g</b>. Yaw drifts over
   time (6-axis fusion, no magnetometer) — use <b>Reset</b> to re-zero it.
+  Switch the fusion filter between <b>Madgwick</b> and <b>VQF</b> (or <b>Accel only</b>
+  for gravity-only tilt — instant but jittery, no yaw) and tune its responsiveness with
+  the slider.
   Drag the model to orbit the camera; pick the 3D model with the dropdown.
   The rate button steps the IMU sample rate <b>0.25x</b> (26 Hz) → <b>4x</b> (416 Hz);
   1x = 104 Hz. Above ~208 Hz BLE may not keep up — watch the actual <i>streaming NNN Hz</i>.
   Only one BLE central can hold the token at a time: close any running bleak script first.
 </p>
 
+<!-- Settings popup: correction (bias) vectors, persisted in the browser. -->
+<div id="settingsModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+  <div class="modal">
+    <h2 id="settingsTitle">Correction vectors</h2>
+    <p class="sub">Subtracted from every sample before fusion (gyro °/s, accel g). Lay the
+      token flat &amp; still: gyro should read ≈ 0 and accel ≈ (0, 0, 1). Saved in this browser.</p>
+    <div class="group">
+      <label>Accel bias (g)</label>
+      <div class="axes">
+        <div class="fld"><span class="ax x">X</span><input type="number" step="0.001" id="ba_x"></div>
+        <div class="fld"><span class="ax y">Y</span><input type="number" step="0.001" id="ba_y"></div>
+        <div class="fld"><span class="ax z">Z</span><input type="number" step="0.001" id="ba_z"></div>
+      </div>
+    </div>
+    <div class="group">
+      <label>Gyro bias (°/s)</label>
+      <div class="axes">
+        <div class="fld"><span class="ax x">X</span><input type="number" step="0.01" id="bg_x"></div>
+        <div class="fld"><span class="ax y">Y</span><input type="number" step="0.01" id="bg_y"></div>
+        <div class="fld"><span class="ax z">Z</span><input type="number" step="0.01" id="bg_z"></div>
+      </div>
+    </div>
+    <div class="row">
+      <button id="settingsZero">Zero</button>
+      <button id="settingsCancel">Cancel</button>
+      <button id="settingsSave" class="primary">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- model-viewer web component (registers the <model-viewer> element). -->
 <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
 <script type="module">
 // This page is a thin UI shell over the `triki-controller` npm package, loaded from
 // a CDN. The package owns all of the moving parts: Web Bluetooth, the 14-byte frame
-// parser, the Madgwick fusion and the heading reset. The page only renders — the glTF
-// model (via model-viewer), the accel/gyro readouts, the status/signal pills and the
-// model/rate controls.
-import { TrikiController, eulerOf, quatMul, quatAboutZ } from "https://esm.sh/triki-controller@0.1.0";
+// parser, the orientation fusion (Madgwick or VQF) and the heading reset. The page
+// only renders — the glTF model (via model-viewer), the accel/gyro readouts, the
+// status/signal pills and the fusion/model/rate controls.
+import { TrikiController, eulerOf, quatMul, quatAboutZ } from "https://esm.sh/triki-controller@0.2.0";
 
 // ---------------------------------------------------------------------------
 // Sample-rate presets for the cycle button. Each Hz value must be in the package's
@@ -269,8 +355,13 @@ const GYRO_RANGE  = 500.0;   // ±500 °/s (bars clamp beyond)
 const $ = (id) => document.getElementById(id);
 const els = {
   conn: $("conn"), led: $("led"), reset: $("reset"), rate: $("rate"),
+  fusionSel: $("fusionSel"), tuneWrap: $("tuneWrap"), tuneLabel: $("tuneLabel"),
+  tune: $("tune"), tuneVal: $("tuneVal"),
   status: $("status"), statusText: $("statusText"), sig: $("sig"), sigText: $("sigText"),
+  batt: $("batt"), battText: $("battText"),
   mv: $("mv"), modelSel: $("modelSel"),
+  settings: $("settings"), settingsModal: $("settingsModal"),
+  settingsSave: $("settingsSave"), settingsCancel: $("settingsCancel"), settingsZero: $("settingsZero"),
   roll: $("roll"), pitch: $("pitch"), yaw: $("yaw"),
   log: $("log"),
 };
@@ -328,7 +419,31 @@ function setState(s) {
 // ---------------------------------------------------------------------------
 // Controller — the package does BLE + parse + fusion; we just consume its events.
 // ---------------------------------------------------------------------------
-const triki = new TrikiController(); // fusion on, 104 Hz, gyroScale 14.286 by default
+// Correction vectors (gyro °/s, accel g) — subtracted from every sample before fusion.
+// These are the built-in DEFAULTS; the ⚙ Settings popup overrides and persists them in
+// this browser (localStorage). You can still hand-edit the defaults here.
+const GYRO_BIAS  = { x: 0, y: 0, z: 0 }; // °/s — default
+const ACCEL_BIAS = { x: 0, y: 0, z: 0 }; // g   — default
+
+const BIAS_KEY = "triki.bias.v1";
+const numOr0 = (v) => (Number.isFinite(+v) ? +v : 0);
+const defaultBias = () => ({ gyro: { ...GYRO_BIAS }, accel: { ...ACCEL_BIAS } });
+function loadBias() {
+  try {
+    const o = JSON.parse(localStorage.getItem(BIAS_KEY) || "null");
+    if (!o) return defaultBias();
+    return {
+      gyro:  { x: numOr0(o.gyro?.x),  y: numOr0(o.gyro?.y),  z: numOr0(o.gyro?.z) },
+      accel: { x: numOr0(o.accel?.x), y: numOr0(o.accel?.y), z: numOr0(o.accel?.z) },
+    };
+  } catch { return defaultBias(); }
+}
+let currentBias = loadBias(); // the applied/persisted vectors; the popup edits this
+
+const triki = new TrikiController({
+  gyroBias: { ...currentBias.gyro },
+  accelBias: { ...currentBias.accel },
+}); // fusion on (madgwick), 104 Hz, gyroScale 14.286 by default
 let ledOn = false;
 
 let latestFrame = null;       // FrameEvent: { raw, gyro:{x,y,z}, accel:{x,y,z}, t }
@@ -342,10 +457,14 @@ triki.on("frame", (f) => {
 });
 triki.on("orientation", (o) => { latestOrient = o; });
 triki.on("rate", (hz) => { currentHzVal = hz; });
+triki.on("battery", (pct) => {
+  els.battText.textContent = "batt " + pct + "%";
+  els.batt.className = "pill " + (pct > 50 ? "live" : pct > 20 ? "busy" : "err");
+});
 triki.on("connectionchange", (s) => {
   setState(s);
   if (s === "streaming") {
-    els.reset.disabled = false;
+    updateResetEnabled();
     els.led.disabled = !triki.hasLed;
     log("• streaming @ " + RATES[rateIdx].hz + " Hz");
   } else if (s === "disconnected") {
@@ -356,6 +475,8 @@ triki.on("connectionchange", (s) => {
     latestFrame = null; latestOrient = null; currentHzVal = 0;
     els.sigText.textContent = "—";
     els.sig.className = "pill idle";
+    els.battText.textContent = "—";
+    els.batt.className = "pill idle";
     setRestPose();
     log("• disconnected");
   }
@@ -526,9 +647,125 @@ els.rate.addEventListener("click", async () => {
   catch (e) { log("⚠ rate: " + e.message); }
 });
 
+// Fusion algorithm + its single tuning knob. Each algorithm has one meaningful gain:
+// Madgwick's beta (accel trust) and VQF's tauAcc (accel low-pass, seconds). The slider
+// retargets to whichever is active; "none" disables fusion (model parks at rest).
+const TUNE = {
+  madgwick: { label: "β", min: 0.01, max: 0.5, step: 0.005, digits: 3, unit: "",  apply: (v) => triki.setBeta(v) },
+  vqf:      { label: "τ", min: 0.2,  max: 6.0, step: 0.1,   digits: 1, unit: "s", apply: (v) => triki.setTauAcc(v) },
+};
+const tuneVals = { madgwick: 0.08, vqf: 2.0 }; // last value chosen per algorithm
+
+function fmtTune(algo) {
+  const cfg = TUNE[algo];
+  return tuneVals[algo].toFixed(cfg.digits) + cfg.unit;
+}
+// Point the slider at the active algorithm's knob (or grey it out for "none").
+function applyTuneUI(algo) {
+  const cfg = TUNE[algo];
+  if (!cfg) {
+    els.tuneWrap.classList.add("off");
+    els.tune.disabled = true;
+    els.tuneLabel.textContent = "—";
+    els.tuneVal.textContent = "no tuning";
+    return;
+  }
+  els.tuneWrap.classList.remove("off");
+  els.tune.disabled = false;
+  els.tune.min = cfg.min; els.tune.max = cfg.max; els.tune.step = cfg.step;
+  els.tune.value = tuneVals[algo];
+  els.tuneLabel.textContent = cfg.label;
+  els.tuneVal.textContent = fmtTune(algo);
+}
+// Reset (heading re-zero) is only meaningful while streaming with fusion on.
+function updateResetEnabled() {
+  els.reset.disabled = triki.state !== "streaming" || triki.fusionAlgorithm === "none";
+}
+
+els.fusionSel.addEventListener("change", () => {
+  const algo = els.fusionSel.value;
+  triki.setFusion(algo);
+  applyTuneUI(algo);
+  updateResetEnabled();
+  if (algo === "none") {
+    latestOrient = null;
+    setRestPose();
+    els.roll.textContent = els.pitch.textContent = els.yaw.textContent = "—";
+  }
+  log("• fusion: " + algo);
+});
+
+els.tune.addEventListener("input", () => {
+  const algo = els.fusionSel.value;
+  const cfg = TUNE[algo];
+  if (!cfg) return;
+  tuneVals[algo] = +els.tune.value;
+  cfg.apply(tuneVals[algo]);
+  els.tuneVal.textContent = fmtTune(algo);
+});
+
+els.fusionSel.value = triki.fusionAlgorithm;
+applyTuneUI(triki.fusionAlgorithm);
+
 // Dev hook: live gyro-scale calibration. Rotate exactly 360° about one axis, then nudge
 // until yaw reads ~360°. Larger value = slower model; smaller = faster.
 window.__setGyroScale = (v) => { triki.setGyroScale(+v); console.log("gyroScale =", +v); };
+// Dev hooks: live correction (bias) vectors. Lay the token flat & still, then nudge each
+// axis until the gyro reads ~0 °/s and accel reads ~(0,0,1) g.
+window.__setGyroBias  = (x, y, z) => { const b = { x:+x, y:+y, z:+z }; triki.setGyroBias(b);  console.log("gyroBias =", b); };
+window.__setAccelBias = (x, y, z) => { const b = { x:+x, y:+y, z:+z }; triki.setAccelBias(b); console.log("accelBias =", b); };
+
+// ---------------------------------------------------------------------------
+// Settings popup — edit + persist the correction vectors (localStorage). Typing previews
+// live; Save commits and stores; Cancel / Esc / backdrop revert to the last saved values.
+// ---------------------------------------------------------------------------
+const biasInputs = {
+  gyro:  { x: $("bg_x"), y: $("bg_y"), z: $("bg_z") },
+  accel: { x: $("ba_x"), y: $("ba_y"), z: $("ba_z") },
+};
+function readBiasInputs() {
+  return {
+    gyro:  { x: numOr0(biasInputs.gyro.x.value),  y: numOr0(biasInputs.gyro.y.value),  z: numOr0(biasInputs.gyro.z.value) },
+    accel: { x: numOr0(biasInputs.accel.x.value), y: numOr0(biasInputs.accel.y.value), z: numOr0(biasInputs.accel.z.value) },
+  };
+}
+function writeBiasInputs(b) {
+  biasInputs.gyro.x.value = b.gyro.x;   biasInputs.gyro.y.value = b.gyro.y;   biasInputs.gyro.z.value = b.gyro.z;
+  biasInputs.accel.x.value = b.accel.x; biasInputs.accel.y.value = b.accel.y; biasInputs.accel.z.value = b.accel.z;
+}
+function applyBias(b) {
+  triki.setGyroBias({ ...b.gyro });
+  triki.setAccelBias({ ...b.accel });
+}
+function openSettings() { writeBiasInputs(currentBias); els.settingsModal.classList.add("open"); }
+function closeSettings(revert) {
+  if (revert) applyBias(currentBias); // discard the live preview
+  els.settingsModal.classList.remove("open");
+}
+
+els.settings.addEventListener("click", openSettings);
+els.settingsCancel.addEventListener("click", () => closeSettings(true));
+els.settingsModal.addEventListener("click", (e) => { if (e.target === els.settingsModal) closeSettings(true); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && els.settingsModal.classList.contains("open")) closeSettings(true);
+});
+els.settingsModal.addEventListener("input", () => applyBias(readBiasInputs())); // live preview
+els.settingsZero.addEventListener("click", () => {
+  writeBiasInputs({ gyro: { x: 0, y: 0, z: 0 }, accel: { x: 0, y: 0, z: 0 } });
+  applyBias(readBiasInputs());
+});
+els.settingsSave.addEventListener("click", () => {
+  currentBias = readBiasInputs();
+  applyBias(currentBias);
+  try { localStorage.setItem(BIAS_KEY, JSON.stringify(currentBias)); } catch (e) { log("⚠ save failed: " + e.message); }
+  closeSettings(false);
+  log("• settings saved");
+});
+// Dev hooks: tune the active filter from the console (mirrors the on-screen slider).
+window.__setBeta = (v) => { tuneVals.madgwick = +v; triki.setBeta(+v);
+  if (els.fusionSel.value === "madgwick") applyTuneUI("madgwick"); console.log("beta =", +v); };
+window.__setTauAcc = (v) => { tuneVals.vqf = +v; triki.setTauAcc(+v);
+  if (els.fusionSel.value === "vqf") applyTuneUI("vqf"); console.log("tauAcc =", +v); };
 </script>
 </body>
 </html>

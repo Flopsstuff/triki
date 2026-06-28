@@ -5,8 +5,9 @@
 `triki-controller` is the reusable core of the [Web Bluetooth controller](./controller)
 shipped as a dependency-free, strongly-typed **TypeScript** package. It connects to the
 Triki token over the Nordic UART Service, starts the IMU stream, parses the 14-byte
-[motion frames](./imu-streaming), and (optionally) fuses orientation with a 6-axis
-**Madgwick** filter, so any web app can reuse the token as a motion controller.
+[motion frames](./imu-streaming), and (optionally) fuses orientation with a selectable
+6-axis filter — **Madgwick** or **VQF** — so any web app can reuse the token as a motion
+controller.
 
 - **npm:** [`triki-controller`](https://www.npmjs.com/package/triki-controller)
 - **Source + README:** [`packages/triki-controller`](https://github.com/Flopsstuff/triki/tree/main/packages/triki-controller#readme)
@@ -71,8 +72,11 @@ document.querySelector("#connect")!.addEventListener("click", async () => {
 });
 ```
 
-For raw frames without fusion, construct with `{ fusion: false }` and listen to
-`"frame"` only; the `orientation` event is then never emitted.
+Pick the filter with the `fusion` option — `"madgwick"` (default), `"vqf"`, `"accel"`
+(accelerometer-only tilt: instant but jittery, no yaw), or `"none"` (`true` ≡
+`"madgwick"`, `false` ≡ `"none"`). For raw frames only, use `{ fusion: "none" }` (or
+`false`) and listen to `"frame"`; the `orientation` event is then never emitted. You can
+also switch at runtime with `setFusion(...)`.
 
 ## Events
 
@@ -85,6 +89,7 @@ unsubscribe function; `off(type, cb)` removes a listener.
 | `orientation` | `OrientationEvent` | every frame, **fusion only** |
 | `connectionchange` | `ConnectionState` (string) | state transitions |
 | `rate` | `number` (Hz) | ~once per second, measured throughput |
+| `battery` | `number` (0–100) | on connect, then on each battery update |
 
 ```ts
 interface FrameEvent {
@@ -97,6 +102,7 @@ interface FrameEvent {
 interface OrientationEvent {
   quaternion: readonly [w: number, x: number, y: number, z: number]; // right-handed
   euler: { roll: number; pitch: number; yaw: number };               // degrees
+  algorithm: "madgwick" | "vqf" | "accel" | "none";                  // active filter
   t: number;
 }
 ```
@@ -107,10 +113,13 @@ interface OrientationEvent {
 
 | Option | Default | Meaning |
 |---|---|---|
-| `fusion` | `true` | run Madgwick fusion and emit `orientation` |
+| `fusion` | `true` | filter: `"madgwick"`/`"vqf"`/`"accel"`/`"none"` (`true`≡madgwick, `false`≡none) |
 | `rateHz` | `104` | initial IMU sample rate |
 | `beta` | `0.08` | Madgwick filter gain |
+| `tauAcc` | `2.0` | VQF accel low-pass time constant (seconds) |
 | `gyroScale` | `14.286` | gyro scale in LSB per deg/s (LSM6DSL ±2000 dps) |
+| `gyroBias` | `{0,0,0}` | per-axis gyro correction (deg/s) subtracted from every sample |
+| `accelBias` | `{0,0,0}` | per-axis accel correction (g) subtracted from every sample |
 
 | Member | Description |
 |---|---|
@@ -121,8 +130,12 @@ interface OrientationEvent {
 | `setLed(on)` | Green LED on/off (throws if the token has no LED characteristic). |
 | `setRate(hz)` | Set the sample rate; applied live when streaming. |
 | `resetHeading()` | Re-zero yaw (no-op when fusion is off). |
+| `setFusion(algo)` | Switch filter at runtime (`"madgwick"`/`"vqf"`/`"accel"`/`"none"`); re-zeros heading. |
+| `setBeta(v)` | Set Madgwick gain; applied live when Madgwick is active. |
+| `setTauAcc(v)` | Set VQF accel low-pass (seconds); applied live when VQF is active. |
 | `setGyroScale(scale)` | Runtime gyro calibration. |
-| `isConnected` / `state` / `rateHz` / `hasLed` / `fusion` | Getters. |
+| `setGyroBias(v)` / `setAccelBias(v)` | Set the per-axis correction vectors live. |
+| `isConnected` / `state` / `rateHz` / `hasLed` / `battery` / `fusion` / `fusionAlgorithm` | Getters. |
 
 `connect()` rejects (after cleaning up) if pairing or the handshake fails, so wrap it in
 `try/catch` to surface picker errors. `reconnect()` reuses the cached device and throws
@@ -157,19 +170,30 @@ Exported alongside the controller:
 
 - `MadgwickAHRS` — 6-axis filter: `update(gx, gy, gz, ax, ay, az, dt)`, `quaternion()`,
   `euler()`, `reset()`.
+- `VqfAHRS` — 6-axis VQF filter (gyro strapdown + low-pass-filtered accel inclination;
+  ported from [VQF](https://github.com/dlaidig/vqf) by Daniel Laidig, MIT). Drop-in for
+  `MadgwickAHRS` — same `update / quaternion / reset` shape and `[w, x, y, z]` convention,
+  plus `setTauAcc(tau)`.
+- `AccelAHRS` — accelerometer-only tilt (no gyro, no yaw); same drop-in shape and frame.
+- `OrientationFilter` — the common interface all three filters implement, so you can swap them.
 - `FrameParser` — stateful framer with header resync: `push(chunk) => RawFrame[]`,
   `reset()`. `decodeCounts(frame)` decodes a single 14-byte frame.
 - `startCmd(hz)` / `ledCmd(on)` — command builders.
 - Quaternion helpers `quatMul` / `quatAboutZ` / `yawRadOf` / `eulerOf`.
 - Constants: `NUS_SERVICE` / `NUS_RX` / `NUS_TX` / `NUS_CTRL`, `START_BASE`,
   `FRAME_LEN`, `SUPPORTED_RATES_HZ` (`[26, 52, 104, 208, 416]`), `DEFAULT_RATE_HZ`,
-  `DEFAULT_GYRO_SCALE`, `DEFAULT_ACCEL_SCALE`, `DEFAULT_BETA`.
+  `DEFAULT_GYRO_SCALE`, `DEFAULT_ACCEL_SCALE`, `DEFAULT_BETA`, `DEFAULT_TAU_ACC`.
 
 ## Caveats
 
 - **Yaw drift.** Fusion is 6-axis (gyro + accel, no magnetometer), so absolute heading
-  drifts over time. Roll/pitch stay levelled by gravity. Call `resetHeading()` to
-  re-zero yaw.
+  drifts over time — for **both** Madgwick and VQF. Roll/pitch stay levelled by gravity.
+  Call `resetHeading()` to re-zero yaw.
+- **Filter choice.** All filters share the same output frame (right-handed
+  `[w, x, y, z]`, gravity-up), so they are interchangeable. Madgwick exposes one gain
+  (`beta`: higher = trusts the accel more, snappier but noisier); VQF exposes
+  `tauAcc` (accel low-pass time constant in seconds: higher = smoother, slower tilt);
+  `"accel"` is gyro-free tilt — instant roll/pitch but noisy, and yaw stays 0.
 - **Math vs display frame.** The library emits the **right-handed** math quaternion. The
   visualizer page negates `y` and `z` (`[w, x, -y, -z]`) only for its on-screen
   roll/pitch/yaw readout, to match the visual sense of rotation; the 3D model itself is

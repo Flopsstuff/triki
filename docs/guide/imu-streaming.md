@@ -48,7 +48,11 @@ Under shaking, gyro swings ±10000+, and the accel axis aligned with gravity rea
 (see [Tooling](./tooling)).
 
 This is sufficient to use the token as a **motion controller** — recover orientation
-via gyro + accel fusion (e.g. Madgwick AHRS).
+via 6-axis gyro + accel fusion. The [`triki-controller`](./library) package ships two
+interchangeable filters: **Madgwick** (one gain, `beta`) and **VQF** (accel low-pass
+time constant `tauAcc`; ported from [VQF](https://github.com/dlaidig/vqf) by Daniel
+Laidig, MIT). Both produce the same right-handed `[w, x, y, z]` frame and, being
+magnetometer-free, drift in yaw — re-zero heading as needed.
 
 > Note: the single-byte opcodes (`0x05` / `0x07` / `0x09` / …) are a separate
 > diagnostic/management interface — raw IMU is NOT there; it only comes from the

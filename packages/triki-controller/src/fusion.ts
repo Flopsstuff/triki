@@ -18,6 +18,25 @@ export interface EulerAngles {
   yaw: number;
 }
 
+/**
+ * Common shape of an orientation filter. Both {@link MadgwickAHRS} and
+ * {@link VqfAHRS} implement it, so the controller can swap algorithms at runtime.
+ * `update` takes gyro in deg/s and accel in g; `quaternion` returns `[w, x, y, z]`.
+ */
+export interface OrientationFilter {
+  update(
+    gxDeg: number,
+    gyDeg: number,
+    gzDeg: number,
+    ax: number,
+    ay: number,
+    az: number,
+    dt: number,
+  ): void;
+  quaternion(): Quaternion;
+  reset(): void;
+}
+
 export interface MadgwickOptions {
   /** Filter gain. Default 0.08. */
   beta?: number;
@@ -26,9 +45,9 @@ export interface MadgwickOptions {
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
 
-export class MadgwickAHRS {
-  /** Filter gain. */
-  readonly beta: number;
+export class MadgwickAHRS implements OrientationFilter {
+  /** Filter gain (mutable so it can be tuned live). */
+  beta: number;
   #q: Quaternion = [1, 0, 0, 0];
 
   constructor(options: MadgwickOptions = {}) {
@@ -124,6 +143,58 @@ export class MadgwickAHRS {
 
     const norm = 1 / Math.hypot(q0, q1, q2, q3);
     this.#q = [q0 * norm, q1 * norm, q2 * norm, q3 * norm];
+  }
+
+  /** Current orientation quaternion `[w, x, y, z]`. */
+  quaternion(): Quaternion {
+    return this.#q;
+  }
+
+  /** Current orientation as Tait-Bryan euler angles in degrees. */
+  euler(): EulerAngles {
+    return eulerOf(this.#q);
+  }
+}
+
+/**
+ * Accelerometer-only tilt — orientation from gravity alone, no gyro. Each sample snaps
+ * to the shortest rotation that maps the measured accel onto world +Z, so roll/pitch
+ * track instantly (but noisily) and yaw is unobservable (stays 0). Same `[w, x, y, z]`
+ * frame as {@link MadgwickAHRS} / {@link VqfAHRS}, so the same mount offsets apply.
+ */
+export class AccelAHRS implements OrientationFilter {
+  #q: Quaternion = [1, 0, 0, 0];
+
+  /** Reset orientation to identity `[1, 0, 0, 0]`. */
+  reset(): void {
+    this.#q = [1, 0, 0, 0];
+  }
+
+  /** Gyro inputs are ignored; only the accel vector (in g) is used. */
+  update(
+    _gxDeg: number,
+    _gyDeg: number,
+    _gzDeg: number,
+    ax: number,
+    ay: number,
+    az: number,
+    _dt: number,
+  ): void {
+    const n = Math.hypot(ax, ay, az);
+    if (n === 0) return; // unusable sample: keep the last orientation
+    const x = ax / n;
+    const y = ay / n;
+    const z = az / n;
+    if (z >= 1 - 1e-9) {
+      this.#q = [1, 0, 0, 0]; // already upright
+    } else if (z <= -1 + 1e-9) {
+      this.#q = [0, 1, 0, 0]; // upside down: 180° about X
+    } else {
+      // Shortest rotation mapping (x, y, z) -> (0, 0, 1): q = normalize([1 + z, y, -x, 0]).
+      const w = 1 + z;
+      const r = 1 / Math.hypot(w, y, x);
+      this.#q = [w * r, y * r, -x * r, 0];
+    }
   }
 
   /** Current orientation quaternion `[w, x, y, z]`. */
