@@ -47,9 +47,16 @@ jobs:
           fi
 
       # prepublishOnly runs `typecheck` + `build`; provenance is auto-attached
-      # by npm under trusted publishing.
+      # by npm under trusted publishing. A prerelease version (one with a hyphen,
+      # e.g. 0.2.0-alpha.0) goes to the `next` dist-tag so it never becomes the
+      # `latest` that `npm i triki-controller` resolves to; stable -> `latest`.
       - name: Publish to npm
-        run: npm publish
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          case "$VERSION" in
+            *-*) echo "Prerelease $VERSION -> dist-tag 'next'"; npm publish --tag next ;;
+            *)   echo "Stable $VERSION -> dist-tag 'latest'";   npm publish ;;
+          esac
 
       # Build the changelog from commits touching the package since the previous
       # v* tag, then cut a GitHub Release for this tag. Skipped on manual dispatch.
@@ -73,4 +80,7 @@ jobs:
               echo "**Full changelog:** https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${TAG}"
             fi
           } > "$NOTES"
-          gh release create "$TAG" --title "$TAG" --notes-file "$NOTES" --verify-tag
+          # Mark prerelease tags (v*-alpha.*, v*-beta.*, …) as GitHub pre-releases.
+          PRE=""
+          case "$TAG" in *-*) PRE="--prerelease" ;; esac
+          gh release create "$TAG" --title "$TAG" --notes-file "$NOTES" --verify-tag $PRE
