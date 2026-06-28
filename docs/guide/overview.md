@@ -33,14 +33,14 @@ tools/       BLE tooling + scripts (tracked; .venv ignored)
   MX25R8035F SPI NOR.
 - **[BLE protocol](./ble-protocol):** request/response over the Nordic UART Service —
   a 1-bit green-LED control register plus a command interface.
-- **[IMU streaming](./imu-streaming):** the main goal — live accelerometer + gyroscope
+- **[IMU streaming](./imu-streaming):** live accelerometer + gyroscope
   over BLE, decoded and verified at ~104 Hz.
 - **[Web Bluetooth controller](./controller):** an in-browser orientation visualizer.
 
 ## Status
 
 - [x] Captured the GATT map; the protocol is NUS request/response
-- [x] **Main goal: live accel + gyro streaming over BLE** — 8-byte start command,
+- [x] **Live accel + gyro streaming over BLE** — 8-byte start command,
       14-byte frames, decoded and verified (`tools/ble_imu_stream.py`).
       See [IMU streaming](./imu-streaming).
 - [x] In-browser [Web Bluetooth controller](./controller) with a live 3D orientation cube

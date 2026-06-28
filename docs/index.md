@@ -16,7 +16,7 @@ hero:
       text: Overview
       link: /guide/overview
     - theme: alt
-      text: IMU streaming (main goal)
+      text: IMU streaming
       link: /guide/imu-streaming
     - theme: alt
       text: View on GitHub
@@ -29,7 +29,7 @@ features:
   - title: BLE protocol
     details: The Nordic UART Service GATT map, the green-LED control register, and the command interface.
     link: /guide/ble-protocol
-  - title: IMU streaming — solved
+  - title: IMU streaming
     details: Live accelerometer + gyroscope over BLE via an 8-byte start command and 14-byte motion frames.
     link: /guide/imu-streaming
   - title: Web Bluetooth controller

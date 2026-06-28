@@ -53,3 +53,17 @@ command arrives on RX.
 
 The raw IMU is **not** on these single-byte opcodes — it comes from the dedicated
 start-stream command on the [IMU streaming](./imu-streaming) page.
+
+## Sample rate (ODR)
+
+The 8-byte IMU start command (`20 10 00 D0 07 68 00 03`, see
+[IMU streaming](./imu-streaming)) carries the sample rate in **bytes 5–6**
+(little-endian uint16, in Hz):
+
+- `68 00` = `0x0068` = **104 Hz** — the default.
+- The firmware accepts the LSM6DSL ODR steps **26 / 52 / 104 / 208 / 416 Hz**
+  (exposed as 0.25× … 4× in the web controller). `12.5 Hz` is rejected.
+- Above ~208 Hz BLE often can't keep up — watch the actual *streaming N Hz*
+  reported by the controller rather than the requested rate.
+- Bytes 3–4 (`D0 07` = 2000) and byte 7 (`03`) are a fixed, **not-yet-decoded**
+  part of the command — they are not the rate; leave them as-is.
