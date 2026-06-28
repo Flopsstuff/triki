@@ -89,12 +89,23 @@ describe("MadgwickAHRS", () => {
     expect(e.yaw).toBeCloseTo(0, 6);
   });
 
-  test("the zero-accel singularity guard yields no NaN (gyro-only integration)", () => {
+  test("the zero-accel guard yields no NaN (gyro-only integration)", () => {
     const m = new MadgwickAHRS();
     for (let i = 0; i < 200; i++) m.update(45, 0, 0, 0, 0, 0, 1 / 104);
     const q = m.quaternion();
     expect(q.every((c) => Number.isFinite(c))).toBe(true);
     expect(norm(q)).toBeCloseTo(1, 10);
+  });
+
+  test("the zero-gradient (snorm) guard yields no NaN when already aligned", () => {
+    // Identity orientation + gravity exactly on +Z makes the accel gradient zero,
+    // so the snorm>0 branch is hit: normalizing a zero vector would poison q with NaN.
+    const m = new MadgwickAHRS();
+    for (let i = 0; i < 200; i++) m.update(0, 0, 0, 0, 0, 1, 1 / 104);
+    const q = m.quaternion();
+    expect(q.every((c) => Number.isFinite(c))).toBe(true);
+    expect(norm(q)).toBeCloseTo(1, 10);
+    expect(m.euler()).toEqual({ roll: 0, pitch: 0, yaw: 0 });
   });
 
   test("beta is mutable and euler() matches eulerOf(quaternion())", () => {
