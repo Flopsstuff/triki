@@ -40,6 +40,7 @@ https://github.com/user-attachments/assets/28ce676f-df75-45fe-97c4-c4d471e001a1
 ```
 assets/      device photos (tracked)
 docs/        VitePress documentation site (tracked)
+packages/    triki-controller — the published npm package (tracked)
 tools/       BLE tooling + scripts (tracked; .venv ignored)
 ```
 
@@ -74,9 +75,12 @@ Details and commands in [`tools/README.md`](tools/README.md).
   - `tools/ble_dump.py` — connect and dump the GATT map
   - `tools/ble_nus.py` — interactive NUS console (write to RX, listen on TX)
   - `tools/ble_imu_stream.py` — start + decode the accel/gyro stream
-- **Web Bluetooth page** — in-browser orientation visualizer, published with the docs
-  site and runnable locally: see [`docs/guide/controller.md`](docs/guide/controller.md)
-
+- **Web Bluetooth page** — in-browser orientation visualizer: open the
+  [live controller](https://flopsstuff.github.io/triki/controller/)
+  ([guide](https://flopsstuff.github.io/triki/guide/controller)), or run it locally.
+- **[`triki-controller`](https://www.npmjs.com/package/triki-controller)** (npm) — the
+  reusable Web Bluetooth client + Madgwick fusion core, as a dependency-free TypeScript
+  package ([guide](https://flopsstuff.github.io/triki/guide/library)).
 
 ## Credits and contributors
  - <a href="https://github.com/Piwencjusz">Piwencjusz</a> — PCB photos, NOR dump, OpenOCD probing
