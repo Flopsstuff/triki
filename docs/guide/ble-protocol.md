@@ -1,6 +1,6 @@
 # BLE protocol
 
-Notes on the Triki BLE interface, captured with [bleak](./tooling) on macOS.
+Notes on the Triki BLE interface, captured with [bleak](https://github.com/hbldh/bleak) on macOS.
 
 > **OPSEC:** device-identifying values (chip ID, any per-device value) are NOT
 > recorded here — only structure is kept.
