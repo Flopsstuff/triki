@@ -95,11 +95,11 @@
     width: 120px; height: 120px; margin: -60px; border-radius: 50%;
     border: 1px solid rgba(255,255,255,.22);
   }
-  /* .disc.top = BACK face (away from camera at rest): green, Żabka "Ż" */
-  .disc.top    { background: radial-gradient(circle at 38% 32%, #5fce97, #3fae79 68%, #2f8e69);
+  /* .disc.top = face shown when the token lies flat (accel rest equilibrium): silver, Triki "T" */
+  .disc.top    { background: radial-gradient(circle at 38% 32%, #d9dee4, #aab2bc 68%, #899099);
                  transform: rotateX( 90deg) translateZ(11px); }
-  /* .disc.bottom = FRONT face (toward camera at rest): grey, Triki "T" */
-  .disc.bottom { background: radial-gradient(circle at 38% 32%, #d9dee4, #aab2bc 68%, #899099);
+  /* .disc.bottom = opposite face: green, Żabka "Ż" */
+  .disc.bottom { background: radial-gradient(circle at 38% 32%, #5fce97, #3fae79 68%, #2f8e69);
                  transform: rotateX(-90deg) translateZ(11px); }
 
   .seg { backface-visibility: hidden; } /* size/transform/background set in JS */
@@ -110,10 +110,10 @@
     font: 800 64px/1 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
     backface-visibility: hidden; pointer-events: none; user-select: none;
   }
-  .glyph.t { color: #485460; }              /* dark grey on the silver front */
-  .glyph.z { color: #eafff5;                /* light on the green back        */
-             text-shadow: 0 1px 2px rgba(0,0,0,.25);
-             transform: rotateZ(180deg); }  /* back face is X-flipped → upright the Ż */
+  .glyph.t { color: #485460;                /* dark grey on the silver face */
+             transform: rotateZ(180deg); }  /* this face is X-flipped → upright the glyph */
+  .glyph.z { color: #eafff5;                /* light on the green face      */
+             text-shadow: 0 1px 2px rgba(0,0,0,.25); }
 
   .rpy { display: flex; justify-content: space-around; margin-top: 8px;
          color: var(--muted); font-size: 12px; }
@@ -165,10 +165,12 @@
   <button id="connect" class="primary">Connect</button>
   <button id="disconnect" disabled>Disconnect</button>
   <button id="led" disabled>LED</button>
-  <button id="reset" disabled>Reset orientation</button>
+  <button id="reset" disabled>Reset heading</button>
+  <button id="pose">View: lying</button>
   <span class="spacer"></span>
   <span id="status" class="pill idle"><span class="dot"></span><span id="statusText">idle</span></span>
   <span id="hz" class="pill idle"><span class="dot"></span><span id="hzText">— Hz</span></span>
+  <span id="batt" class="pill idle"><span class="dot"></span><span id="battText">Batt: —</span></span>
 </header>
 
 <div class="grid">
@@ -178,8 +180,8 @@
       <div class="model" id="model">
         <div class="cap" id="cap">
           <!-- 24 rim segments injected by buildCap() -->
-          <div class="disc bottom"><span class="glyph t">T</span></div>
-          <div class="disc top"><span class="glyph z">Ż</span></div>
+          <div class="disc bottom"><span class="glyph z">Ż</span></div>
+          <div class="disc top"><span class="glyph t">T</span></div>
         </div>
       </div>
     </div>
@@ -209,7 +211,9 @@
 
 <p class="hint">
   Lay the token flat → the Z accel axis should read ≈ <b>+1.00 g</b>. Yaw drifts over
-  time (6-axis fusion, no magnetometer) — use <b>Reset orientation</b> to re-zero.
+  time (6-axis fusion, no magnetometer) — use <b>Reset heading</b> to re-zero it.
+  <b>View: lying</b> looks top-down (token flat on the table); <b>standing</b> tilts the
+  camera so a vertically-held token renders face-on (1:1 with the screen).
   Only one BLE central can hold the token at a time: close any running bleak script first.
 </p>
 
@@ -223,6 +227,8 @@ const NUS  = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 const RX   = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // write / write-no-response
 const TX   = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // notify
 const CTRL = "6e400004-b5a3-f393-e0a9-e50e24dcca9e"; // 1-bit green LED
+const BATT_SVC  = "battery_service"; // 0x180F  standard BLE Battery Service
+const BATT_CHAR = "battery_level";   // 0x2A19  uint8 percent (0–100)
 
 const START       = Uint8Array.of(0x20, 0x10, 0x00, 0xD0, 0x07, 0x68, 0x00, 0x03);
 const ACCEL_SCALE = 2048.0;  // LSB per g (verified: flat token reads +2048 = 1 g)
@@ -247,9 +253,10 @@ const GYRO_RANGE  = 500.0;   // ±500 °/s (bars clamp beyond)
 // ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const els = {
-  connect: $("connect"), disconnect: $("disconnect"), led: $("led"), reset: $("reset"),
+  connect: $("connect"), disconnect: $("disconnect"), led: $("led"), reset: $("reset"), pose: $("pose"),
   status: $("status"), statusText: $("statusText"),
   hz: $("hz"), hzText: $("hzText"),
+  batt: $("batt"), battText: $("battText"),
   model: $("model"), cap: $("cap"), roll: $("roll"), pitch: $("pitch"), yaw: $("yaw"),
   log: $("log"),
 };
@@ -376,6 +383,34 @@ function quatToMatrix3d([w, x, y, z]) {
   return `matrix3d(${r00},${r10},${r20},0, ${r01},${r11},${r21},0, ${r02},${r12},${r22},0, 0,0,0,1)`;
 }
 
+// --- quaternion helpers for the display reference (heading reset + view pose) -------
+function quatMul(a, b) {
+  const [aw, ax, ay, az] = a, [bw, bx, by, bz] = b;
+  return [
+    aw*bw - ax*bx - ay*by - az*bz,
+    aw*bx + ax*bw + ay*bz - az*by,
+    aw*by - ax*bz + ay*bw + az*bx,
+    aw*bz + ax*by - ay*bx + az*bw,
+  ];
+}
+// rotation about the world vertical (gravity) axis = Madgwick world Z = the heading DOF
+function quatAboutZ(rad) { const h = rad / 2; return [Math.cos(h), 0, 0, Math.sin(h)]; }
+function yawRadOf([w, x, y, z]) { return Math.atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z)); }
+function eulerOf([w, x, y, z]) {
+  const R = 180 / Math.PI;
+  return {
+    roll:  Math.atan2(2*(w*x + y*z), 1 - 2*(x*x + y*y)) * R,
+    pitch: Math.asin(Math.max(-1, Math.min(1, 2*(w*y - z*x)))) * R,
+    yaw:   Math.atan2(2*(w*z + x*y), 1 - 2*(y*y + z*z)) * R,
+  };
+}
+
+// Display reference, applied on top of the raw fusion quaternion every frame:
+//   qDisplay = yawOffset ∘ q     (heading re-zero, set by "Reset heading")
+// then the CSS view tilt for the lying/standing camera angle.
+let yawOffsetQ = [1, 0, 0, 0];
+let standing = false;
+
 // ---------------------------------------------------------------------------
 // Frame parser — port of ble_imu_stream.py on_tx()
 // ---------------------------------------------------------------------------
@@ -473,9 +508,18 @@ function render() {
     setBar(gyroRows.y.fill, f.gy, GYRO_RANGE);
     setBar(gyroRows.z.fill, f.gz, GYRO_RANGE);
 
-    els.model.style.transform = quatToMatrix3d(madgwick.quat());
+    const qd = quatMul(yawOffsetQ, madgwick.quat());
+    // CSS is left-handed (Y points down), the IMU/fusion frame is right-handed, so the
+    // sense of rotation about Y and Z comes out reversed. Negating q.y and q.z (a
+    // conjugation by 180° about X) flips exactly those two and leaves X untouched —
+    // done only for display, the fusion quaternion stays consistent.
+    const qShow = [qd[0], qd[1], -qd[2], -qd[3]];
+    // "standing" tilts the camera 90° so a vertically-held token renders face-on (1:1
+    // with the monitor); "lying" looks straight down the gravity axis (top-down).
+    const view = standing ? "rotateX(90deg) " : "";
+    els.model.style.transform = view + quatToMatrix3d(qShow);
 
-    const e = madgwick.euler();
+    const e = eulerOf(qShow);
     els.roll.textContent  = e.roll.toFixed(0)  + "°";
     els.pitch.textContent = e.pitch.toFixed(0) + "°";
     els.yaw.textContent   = e.yaw.toFixed(0)   + "°";
@@ -492,7 +536,7 @@ requestAnimationFrame(render);
 // ---------------------------------------------------------------------------
 // BLE
 // ---------------------------------------------------------------------------
-let device = null, gatt = null, rxChar = null, txChar = null, ctrlChar = null;
+let device = null, gatt = null, rxChar = null, txChar = null, ctrlChar = null, battChar = null;
 let ledOn = false;
 
 if (!navigator.bluetooth) {
@@ -505,7 +549,7 @@ async function connect() {
     setStatus("busy", "requesting device…");
     device = await navigator.bluetooth.requestDevice({
       filters: [{ namePrefix: "TRIKI" }, { namePrefix: "Triki" }],
-      optionalServices: [NUS],
+      optionalServices: [NUS, BATT_SVC],
     });
     device.addEventListener("gattserverdisconnected", onDisconnected);
 
@@ -522,6 +566,8 @@ async function connect() {
     await rxChar.writeValueWithoutResponse(START);
     log("→ START " + hex(START));
 
+    readBattery(); // standard Battery Service — best-effort, never blocks the stream
+
     setStatus("live", "streaming");
     els.connect.disabled = true;
     els.disconnect.disabled = false;
@@ -531,6 +577,30 @@ async function connect() {
     setStatus("err", "error");
     log("⚠ " + e.message);
     cleanup();
+  }
+}
+
+// Standard BLE Battery Service (0x180F / 0x2A19) — read once on connect, then live-update
+// if the characteristic supports notifications. Best-effort: its absence never affects
+// the IMU stream.
+async function readBattery() {
+  const show = (dv) => {
+    const pct = dv.getUint8(0);
+    els.battText.textContent = "Batt: " + pct + "%";
+    els.batt.className = "pill " + (pct <= 15 ? "err" : "live");
+  };
+  try {
+    const bsvc = await gatt.getPrimaryService(BATT_SVC);
+    battChar = await bsvc.getCharacteristic(BATT_CHAR);
+    show(await battChar.readValue());
+    if (battChar.properties.notify) {
+      await battChar.startNotifications();
+      battChar.addEventListener("characteristicvaluechanged", (ev) => show(ev.target.value));
+    }
+  } catch (e) {
+    els.battText.textContent = "Batt: —";
+    els.batt.className = "pill idle";
+    log("• battery: " + e.message);
   }
 }
 
@@ -554,7 +624,7 @@ function disconnect() {
 }
 
 function cleanup() {
-  rxChar = txChar = ctrlChar = gatt = null;
+  rxChar = txChar = ctrlChar = battChar = gatt = null;
   ledOn = false;
   buf = new Uint8Array(0);
   latest = null;
@@ -565,6 +635,8 @@ function cleanup() {
   els.led.disabled = true;
   els.reset.disabled = true;
   els.led.classList.remove("on");
+  els.battText.textContent = "Batt: —";
+  els.batt.className = "pill idle";
 }
 
 async function toggleLed() {
@@ -587,7 +659,18 @@ function hex(arr) {
 els.connect.addEventListener("click", connect);
 els.disconnect.addEventListener("click", disconnect);
 els.led.addEventListener("click", toggleLed);
-els.reset.addEventListener("click", () => { madgwick.reset(); log("• orientation reset"); });
+// Reset heading: zero only the yaw (heading) — the one DOF that drifts. Tilt stays
+// absolute (the accelerometer keeps it levelled), so there is no swing.
+els.reset.addEventListener("click", () => {
+  yawOffsetQ = quatAboutZ(-yawRadOf(madgwick.quat()));
+  log("• heading reset");
+});
+els.pose.addEventListener("click", () => {
+  standing = !standing;
+  els.pose.textContent = "View: " + (standing ? "standing" : "lying");
+  els.pose.classList.toggle("on", standing);
+  log("• view: " + (standing ? "standing" : "lying"));
+});
 </script>
 </body>
 </html>
