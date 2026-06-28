@@ -7,6 +7,8 @@
 *.webp  filter=lfs diff=lfs merge=lfs -text
 # Media
 *.mp4   filter=lfs diff=lfs merge=lfs -text
+# 3D models
+*.glb   filter=lfs diff=lfs merge=lfs -text
 # Firmware / dumps / archives
 *.bin   filter=lfs diff=lfs merge=lfs -text
 *.dat   filter=lfs diff=lfs merge=lfs -text
