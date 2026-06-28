@@ -37,7 +37,9 @@ project's Python venv (`tools/.venv/`, gitignored).
 - `ble_dump.py` — connect, dump GATT, log notifications
 - `ble_nus.py` — interactive NUS console (write RX, watch TX)
 - `ble_imu_stream.py` — start + decode the 14-byte IMU motion frames
-- `ble_opcode_sweep.py` — map the device's command interface
+- `ble_opcode_sweep.py` — map the command interface by single-byte opcode
+- `ble_rx_probe.py` — probe RX with multi-byte payloads, classify each by reaction
+- `ble_enable_scan.py` — sweep for an "enable / active mode" command
 - `ble_probe_ctrl.py` / `ble_ctrl_toggle.py` — exercise / toggle the green-LED ctrl register
 - `ble_listen.py` — optionally set ctrl, then listen
 - `ble_poll.py` / `ble_imu_test.py` — correlate response columns with motion

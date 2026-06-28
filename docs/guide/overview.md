@@ -5,8 +5,7 @@ shaped like a bottle cap (crown cap), built around an **nRF52810** BLE SoC and a
 **LSM6DSL** accelerometer/gyroscope.
 
 > Goal: read the token's motion sensors over BLE and reuse it as a **motion
-> controller** — recover orientation from gyro + accel fusion. No device-identifying
-> values (serial, BLE MAC) are published.
+> controller** — recover orientation from gyro + accel fusion.
 
 <div style="display:flex; gap:1rem; flex-wrap:wrap; align-items:flex-start;">
   <figure style="margin:0; max-width:320px;">
@@ -44,4 +43,10 @@ tools/       BLE tooling + scripts (tracked; .venv ignored)
       14-byte frames, decoded and verified (`tools/ble_imu_stream.py`).
       See [IMU streaming](./imu-streaming).
 - [x] In-browser [Web Bluetooth controller](./controller) with a live 3D orientation cube
-- [ ] Build a native controller bridge (orientation fusion → joystick / OSC / HID)
+- [x] Extracted the IMU-parse + Madgwick orientation core into a reusable,
+      dependency-free [`triki-controller`](https://www.npmjs.com/package/triki-controller)
+      library (browser BLE client + framework-agnostic fusion math)
+- [ ] Build a native controller bridge (joystick / OSC / HID) — the parse + fusion
+      half above is done and reusable; what's left is a native BLE transport and the
+      OS-level output, since a browser can't emit a real joystick / HID
+      (see [Web Bluetooth controller](./controller))

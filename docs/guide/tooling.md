@@ -34,13 +34,16 @@ motion frames into scaled gyro (deg/s) + accel (g):
 
 ## Scripts
 
-Run each with the venv interpreter:
+Run each with the venv interpreter. `<target>` is the token's BLE name or address
+(from `ble_scan.py`):
 
 - `ble_nus.py <target>` — interactive console (write RX, watch TX).
-- `ble_opcode_sweep.py <target>` — map the device's command interface.
-- `ble_probe_ctrl.py` / `ble_ctrl_toggle.py` — exercise / toggle the green-LED ctrl register.
+- `ble_opcode_sweep.py <target>` — map the command interface by single-byte opcode.
+- `ble_rx_probe.py <target>` — probe RX with multi-byte payloads, classify each by reaction.
+- `ble_enable_scan.py <target>` — sweep for an "enable / active mode" command.
+- `ble_probe_ctrl.py <target>` / `ble_ctrl_toggle.py <target>` — exercise / toggle the green-LED ctrl register.
 - `ble_listen.py <target>` — optionally set ctrl, then listen.
-- `ble_poll.py` / `ble_imu_test.py` — correlate response columns with motion.
+- `ble_poll.py <target> <opcodes>` / `ble_imu_test.py <target>` — correlate response columns with motion.
 
 > Tip: the token sleeps within seconds when idle — keep it moving so it stays awake
 > and reachable while a script connects.
