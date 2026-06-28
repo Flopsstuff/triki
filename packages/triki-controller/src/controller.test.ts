@@ -307,3 +307,64 @@ describe("rate measurement", () => {
     expect(last(rates)).toBe(5);
   });
 });
+
+describe("input hardening", () => {
+  test("ignores a non-finite or non-positive gyro scale", async () => {
+    const h = install();
+    // 0 in the constructor falls back to the default scale (no div-by-zero).
+    const ctrl = make({ fusion: "none", gyroScale: 0 });
+    await ctrl.connect();
+
+    const frames: FrameEvent[] = [];
+    ctrl.on("frame", (e) => frames.push(e));
+
+    h.tx.notify(frame(14286, 0, 0, 0, 0, 0));
+    expect(last(frames).gyro.x).toBeCloseTo(1000, 3); // 14286 / 14.286, not Infinity
+
+    ctrl.setGyroScale(1);
+    h.tx.notify(frame(100, 0, 0, 0, 0, 0));
+    expect(last(frames).gyro.x).toBeCloseTo(100, 3);
+
+    // Bad values are rejected and the previous scale stands.
+    ctrl.setGyroScale(0);
+    ctrl.setGyroScale(NaN);
+    h.tx.notify(frame(100, 0, 0, 0, 0, 0));
+    expect(last(frames).gyro.x).toBeCloseTo(100, 3);
+  });
+
+  test("stores a defensive copy of bias and coerces non-finite axes to 0", async () => {
+    const h = install();
+    const bias = { x: 1, y: 2, z: 3 };
+    const ctrl = make({ fusion: "none", gyroBias: bias });
+    await ctrl.connect();
+
+    const frames: FrameEvent[] = [];
+    ctrl.on("frame", (e) => frames.push(e));
+
+    bias.x = 999; // mutating the caller's object must not affect the controller
+    h.tx.notify(frame(0, 0, 0, 0, 0, 0));
+    expect(last(frames).gyro.x).toBeCloseTo(-1, 6); // used the stored copy (1)
+
+    ctrl.setGyroBias({ x: NaN, y: 5, z: Infinity });
+    h.tx.notify(frame(0, 0, 0, 0, 0, 0));
+    const f = last(frames);
+    expect(f.gyro.x).toBeCloseTo(0, 6); // NaN -> 0
+    expect(f.gyro.y).toBeCloseTo(-5, 6);
+    expect(f.gyro.z).toBeCloseTo(0, 6); // Infinity -> 0
+  });
+
+  test("setRate while VQF is active realigns the sample period and re-sends START", async () => {
+    const h = install();
+    const ctrl = make({ fusion: "vqf" });
+    await ctrl.connect();
+
+    await ctrl.setRate(208);
+    expect(ctrl.rateHz).toBe(208);
+    expect(bytes(last(h.rx.writes))).toEqual(bytes(startCmd(208)));
+
+    const orientations: OrientationEvent[] = [];
+    ctrl.on("orientation", (e) => orientations.push(e));
+    h.tx.notify(frame(0, 0, 0, 0, 0, 2048));
+    expect(last(orientations).quaternion.every((c) => Number.isFinite(c))).toBe(true);
+  });
+});

@@ -53,3 +53,34 @@ describe("VqfAHRS", () => {
     expect(v.quaternion()).toEqual([1, 0, 0, 0]);
   });
 });
+
+describe("VqfAHRS input hardening", () => {
+  test("sanitizes a non-finite or negative tauAcc to the default", () => {
+    expect(new VqfAHRS({ tauAcc: NaN }).tauAcc).toBe(DEFAULT_TAU_ACC);
+    expect(new VqfAHRS({ tauAcc: Infinity }).tauAcc).toBe(DEFAULT_TAU_ACC);
+    expect(new VqfAHRS({ tauAcc: -1 }).tauAcc).toBe(DEFAULT_TAU_ACC);
+    // 0 is valid — the low-pass degrades to a pass-through.
+    expect(new VqfAHRS({ tauAcc: 0 }).tauAcc).toBe(0);
+  });
+
+  test("setTauAcc rejects bad values back to the default", () => {
+    const v = new VqfAHRS({ tauAcc: 1 });
+    v.setTauAcc(-5);
+    expect(v.tauAcc).toBe(DEFAULT_TAU_ACC);
+    v.setTauAcc(NaN);
+    expect(v.tauAcc).toBe(DEFAULT_TAU_ACC);
+  });
+
+  test("setSamplePeriod ignores bad input and keeps the output finite", () => {
+    const v = new VqfAHRS({ tauAcc: 0.5 });
+    v.update(0, 0, 0, 0, 0, 1, 1 / 104);
+    v.setSamplePeriod(0);
+    v.setSamplePeriod(-1);
+    v.setSamplePeriod(NaN);
+    // A valid period recomputes the coefficients without disturbing the state.
+    v.setSamplePeriod(1 / 208);
+    for (let i = 0; i < 200; i++) v.update(10, -5, 2, 0, 0.5, 0.866, 1 / 208);
+    expect(v.quaternion().every((c) => Number.isFinite(c))).toBe(true);
+    expect(norm(v.quaternion())).toBeCloseTo(1, 8);
+  });
+});
