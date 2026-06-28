@@ -29,8 +29,10 @@ jobs:
           cache-dependency-path: packages/triki-controller/package-lock.json
 
       # Trusted publishing (OIDC) needs npm >= 11.5.1; ubuntu-latest ships older.
+      # Pin the major (11.x) so a future npm 12 can't silently change publish
+      # behaviour; the newest 11.x always satisfies the OIDC minimum.
       - name: Upgrade npm
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       - name: Install dependencies
         run: npm ci
