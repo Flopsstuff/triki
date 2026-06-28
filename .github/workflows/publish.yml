@@ -19,6 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # full history + tags so the changelog range works
+          persist-credentials: false # keep GITHUB_TOKEN out of git config; npm uses OIDC, gh gets GH_TOKEN via env
 
       - uses: actions/setup-node@v4
         with:
