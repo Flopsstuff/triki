@@ -1,7 +1,8 @@
 /** Public API for triki-controller. */
 
 export { TrikiController } from "./controller";
-export { MadgwickAHRS, quatMul, quatAboutZ, yawRadOf, eulerOf } from "./fusion";
+export { MadgwickAHRS, AccelAHRS, quatMul, quatAboutZ, yawRadOf, eulerOf } from "./fusion";
+export { VqfAHRS, DEFAULT_TAU_ACC } from "./vqf";
 export { FrameParser, decodeCounts } from "./parser";
 export {
   startCmd,
@@ -23,12 +24,14 @@ export {
   SUPPORTED_RATES_HZ,
 } from "./protocol";
 
-export type { Quaternion, EulerAngles, MadgwickOptions } from "./fusion";
+export type { Quaternion, EulerAngles, MadgwickOptions, OrientationFilter } from "./fusion";
+export type { VqfOptions } from "./vqf";
 export type { RawFrame } from "./parser";
 export type { SupportedRateHz } from "./protocol";
 export type { Listener, Unsubscribe } from "./emitter";
 export type {
   ConnectionState,
+  FusionAlgorithm,
   Vec3,
   FrameEvent,
   OrientationEvent,

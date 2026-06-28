@@ -35,7 +35,7 @@ features:
     details: Live accelerometer + gyroscope over BLE via an 8-byte start command and 14-byte motion frames.
     link: /guide/imu-streaming
   - title: triki-controller (npm)
-    details: A dependency-free TypeScript package — connect over Web Bluetooth, stream the IMU, and read fused Madgwick orientation in your own app.
+    details: A dependency-free TypeScript package — connect over Web Bluetooth, stream the IMU, and read fused orientation (Madgwick or VQF) in your own app.
     link: /guide/library
 ---
 

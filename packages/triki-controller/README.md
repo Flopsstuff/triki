@@ -3,8 +3,8 @@
 A dependency-free, strongly-typed **Web Bluetooth** client for the [Żabka **Triki**](https://github.com/Flopsstuff/triki)
 BLE token (an nRF52810 BLE SoC + LSM6DSL accelerometer/gyroscope, shaped like a bottle cap).
 It connects over the Nordic UART Service, starts the IMU stream, parses the 14-byte motion
-frames, and optionally fuses orientation with a 6-axis **Madgwick** filter — so you can reuse
-the token as a motion controller from any web app.
+frames, and optionally fuses orientation with a selectable 6-axis filter — **Madgwick** or
+**VQF** — so you can reuse the token as a motion controller from any web app.
 
 ![Triki motion controller demo](https://flopsstuff.github.io/triki/img/controller-demo.gif)
 
@@ -60,13 +60,18 @@ document.querySelector("#connect")!.addEventListener("click", async () => {
 });
 ```
 
-Raw frames without fusion: construct with `{ fusion: false }` and listen only to `"frame"`.
-The `MadgwickAHRS` and `FrameParser` classes are also exported and usable standalone.
+Pick the filter with `fusion`: `"madgwick"` (default), `"vqf"`, `"accel"` (accelerometer-only
+tilt — instant but jittery, no yaw), or `"none"` (`true`≡madgwick, `false`≡none). Raw frames
+only: `{ fusion: "none" }`, listen to `"frame"`. Switch live with `setFusion(...)`. The
+`MadgwickAHRS`, `VqfAHRS`, `AccelAHRS` and `FrameParser` classes are also exported and usable
+standalone (the filters share an `OrientationFilter` interface).
 
 ## API
 
-`new TrikiController(options?)` — `options`: `fusion?` (default `true`), `rateHz?` (default `104`),
-`beta?` (default `0.08`), `gyroScale?` (default `14.286`).
+`new TrikiController(options?)` — `options`: `fusion?` (`"madgwick"`/`"vqf"`/`"accel"`/`"none"`,
+default `"madgwick"`), `rateHz?` (default `104`), `beta?` (Madgwick gain, default `0.08`),
+`tauAcc?` (VQF accel low-pass seconds, default `2.0`), `gyroScale?` (default `14.286`),
+`gyroBias?` / `accelBias?` (per-axis correction vectors, default zeros).
 
 | Member | Description |
 | --- | --- |
@@ -77,12 +82,15 @@ The `MadgwickAHRS` and `FrameParser` classes are also exported and usable standa
 | `setLed(on)` | Green LED on/off (throws if the token has no LED characteristic). |
 | `setRate(hz)` | Set sample rate; applied live when streaming. |
 | `resetHeading()` | Re-zero yaw (no-op when fusion is off). |
+| `setFusion(algo)` | Switch filter at runtime (`"madgwick"`/`"vqf"`/`"accel"`/`"none"`). |
+| `setBeta(v)` / `setTauAcc(v)` | Tune the active Madgwick / VQF filter live. |
 | `setGyroScale(scale)` | Runtime gyro calibration. |
-| `isConnected` / `state` / `rateHz` / `hasLed` / `fusion` | Getters. |
+| `setGyroBias(v)` / `setAccelBias(v)` | Set the per-axis correction vectors live. |
+| `isConnected` / `state` / `rateHz` / `hasLed` / `battery` / `fusion` / `fusionAlgorithm` | Getters. |
 | `on(type, cb)` / `once` / `off` | Typed subscription; `on`/`once` return an unsubscribe fn. |
 
 Events: `frame`, `orientation` (fusion only), `connectionchange` (payload is the state string),
-`rate` (payload is the measured Hz).
+`rate` (measured Hz), `battery` (level in percent, 0–100).
 
 ## Caveats
 

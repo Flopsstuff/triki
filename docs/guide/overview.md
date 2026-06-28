@@ -47,8 +47,9 @@ tools/       BLE tooling + scripts (tracked; .venv ignored)
       14-byte frames, decoded and verified (`tools/ble_imu_stream.py`).
       See [IMU streaming](./imu-streaming).
 - [x] In-browser [Web Bluetooth controller](./controller) with a live 3D orientation model
-- [x] Extracted the IMU-parse + Madgwick orientation core into a reusable,
-      dependency-free [`triki-controller`](https://www.npmjs.com/package/triki-controller)
+- [x] Extracted the IMU-parse + orientation core (selectable Madgwick or VQF fusion)
+      into a reusable, dependency-free
+      [`triki-controller`](https://www.npmjs.com/package/triki-controller)
       library (browser BLE client + framework-agnostic fusion math)
 - [ ] Build a native controller bridge (joystick / OSC / HID) — the parse + fusion
       half above is done and reusable; what's left is a native BLE transport and the
