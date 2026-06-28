@@ -1,6 +1,6 @@
 {
   "name": "triki-controller",
-  "version": "0.1.0",
+  "version": "0.1.1-alpha.0",
   "description": "Web Bluetooth driver for the Żabka Triki token (nRF52810 + LSM6DSL) — connect, stream the IMU, and read fused Madgwick orientation in the browser to reuse the token as a motion controller.",
   "type": "module",
   "license": "MIT",
