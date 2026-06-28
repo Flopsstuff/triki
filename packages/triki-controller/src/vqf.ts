@@ -26,6 +26,16 @@ export interface VqfOptions {
 /** Default accelerometer low-pass time constant (seconds). */
 export const DEFAULT_TAU_ACC = 2.0;
 
+/**
+ * Clamp `tauAcc` to a finite, non-negative value, falling back to the default for
+ * NaN/Infinity/negative input (which would otherwise produce non-finite Butterworth
+ * coefficients and poison the quaternion). `0` is valid — the filter degrades to a
+ * pass-through.
+ */
+function sanitizeTauAcc(tau: number): number {
+  return Number.isFinite(tau) && tau >= 0 ? tau : DEFAULT_TAU_ACC;
+}
+
 export class VqfAHRS implements OrientationFilter {
   #tauAcc: number;
   /** Sample period in seconds, fixed from the first {@link update}. */
@@ -48,7 +58,7 @@ export class VqfAHRS implements OrientationFilter {
   #initSum: number[] = [0, 0, 0];
 
   constructor(options: VqfOptions = {}) {
-    this.#tauAcc = options.tauAcc ?? DEFAULT_TAU_ACC;
+    this.#tauAcc = sanitizeTauAcc(options.tauAcc ?? DEFAULT_TAU_ACC);
   }
 
   /** Accelerometer low-pass time constant (seconds). */
@@ -62,7 +72,7 @@ export class VqfAHRS implements OrientationFilter {
    * state, so a tuning slider does not snap the model.
    */
   setTauAcc(tau: number): void {
-    this.#tauAcc = tau;
+    this.#tauAcc = sanitizeTauAcc(tau);
     if (this.#ts !== null) {
       const c = filterCoeffs(this.#tauAcc, this.#ts);
       this.#b = c.b;
