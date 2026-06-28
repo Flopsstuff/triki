@@ -25,6 +25,10 @@ jobs:
         working-directory: packages/triki-controller
     steps:
       - uses: actions/checkout@v4
+        with:
+          # This job runs PR-controlled install/test steps and needs no token;
+          # don't persist checkout credentials into the local git config.
+          persist-credentials: false
 
       # Node 24 mirrors the publish workflow, so tests run on the same runtime
       # that ships the package.
