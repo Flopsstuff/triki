@@ -14,7 +14,7 @@ motion sensors over BLE and reuse it as a **motion controller**.
 
 https://github.com/user-attachments/assets/61ef9f09-5221-43e0-a817-9f42f8408c86
 
-> If the player doesn't load, [watch the clip directly](assets/img.mp4).
+> If the player doesn't load, [watch the clip directly](assets/video.mp4).
 
 ## 📖 **Docs site:** <https://flopsstuff.github.io/triki/>
 

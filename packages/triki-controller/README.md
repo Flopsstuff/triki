@@ -6,6 +6,8 @@ It connects over the Nordic UART Service, starts the IMU stream, parses the 14-b
 frames, and optionally fuses orientation with a 6-axis **Madgwick** filter — so you can reuse
 the token as a motion controller from any web app.
 
+![Triki motion controller demo](https://flopsstuff.github.io/triki/img/controller-demo.gif)
+
 ## Browser support
 
 Web Bluetooth is required:

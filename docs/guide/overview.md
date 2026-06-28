@@ -16,6 +16,10 @@ shaped like a bottle cap (crown cap), built around an **nRF52810** BLE SoC and a
     <img src="/img/board.jpg" alt="Triki board" />
     <figcaption>Board — Żabka "Z" logo, nRF52810</figcaption>
   </figure>
+  <figure style="margin:0; max-width:240px;">
+    <video src="/img/demo.mp4" controls muted loop autoplay playsinline preload="metadata" style="width:100%; border-radius:8px; display:block;"></video>
+    <figcaption>Live demo — streaming motion over BLE</figcaption>
+  </figure>
 </div>
 
 ## Repository layout
