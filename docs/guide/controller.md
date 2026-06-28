@@ -2,13 +2,16 @@
 
 <p><a href="../controller/" target="_blank" rel="noreferrer"><strong>▶ Open the live controller</strong></a> — runs in the browser, no install (Chromium-based browsers only).</p>
 
-A single static page (`docs/public/controller/index.html`) that connects to the Triki
-token straight from the browser via the **Web Bluetooth API**, streams the IMU, and
-shows a live 3D cube tracking the token's orientation. No backend, no build, no
-dependencies — it is published with this site and also runs locally.
+A static page (`docs/public/controller/index.html`) that connects to the Triki token
+straight from the browser via the **Web Bluetooth API**, streams the IMU, and shows a
+live 3D cube tracking the token's orientation. No backend and no build step — it is
+published with this site and also runs locally.
 
-> Want this in your own app? The same connect / parse / fusion core is published as the
-> [`triki-controller`](./library) npm package.
+> The page is a thin UI over the [`triki-controller`](./library) npm package: all of the
+> BLE, frame parsing and Madgwick fusion live in the package, loaded at runtime from a
+> CDN (`https://esm.sh/triki-controller`). The page itself only renders the model,
+> readouts and controls. (Loading from a CDN means the page needs network access on
+> first load; the package is tiny and gets cached.)
 
 > OPSEC: the page stores **no device identifiers** — the browser's device picker
 > selects the token at runtime. Keep the serial / MAC / host UUID out of any tracked
@@ -58,13 +61,8 @@ Web Bluetooth is enabled with no certificate setup.
 2. The page sends the start command automatically; status turns to *streaming* and the
    rate settles around **104 Hz**.
 3. Move the token — the cube follows. Flat on a table, the Z accel axis reads ≈ +1.00 g.
-4. **LED** toggles the green LED; **Reset orientation** re-zeros the fusion quaternion.
-
-No hardware handy? Feed a synthetic frame from the browser console:
-
-```js
-__feedFrame("2200 0000 0000 0000 0000 0000 0008") // ~1 g on Z
-```
+4. **LED** toggles the green LED; **Reset** re-zeros the heading (yaw) only, so tilt
+   stays gravity-levelled.
 
 ## Protocol mapping
 
@@ -85,7 +83,7 @@ the authoritative spec; the page mirrors it:
 ## Limitations
 
 - **Yaw drifts** over time: 6-axis fusion has no magnetometer, so heading is relative —
-  use *Reset orientation* to re-zero.
+  use *Reset* to re-zero it.
 - The browser **cannot emit a real joystick / HID gamepad**; this page is a visualizer.
   A true controller bridge (joystick / OSC / HID) needs a native helper or a
   WebSocket/WebHID side channel.
