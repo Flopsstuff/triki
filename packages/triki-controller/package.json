@@ -1,0 +1,61 @@
+{
+  "name": "triki-controller",
+  "version": "0.1.0",
+  "description": "Web Bluetooth driver for the Żabka Triki token (nRF52810 + LSM6DSL) — connect, stream the IMU, and read fused Madgwick orientation in the browser to reuse the token as a motion controller.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Flopsstuff",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Flopsstuff/triki.git",
+    "directory": "packages/triki-controller"
+  },
+  "homepage": "https://github.com/Flopsstuff/triki/tree/main/packages/triki-controller#readme",
+  "bugs": "https://github.com/Flopsstuff/triki/issues",
+  "keywords": [
+    "web-bluetooth",
+    "bluetooth",
+    "ble",
+    "imu",
+    "lsm6dsl",
+    "nrf52810",
+    "madgwick",
+    "ahrs",
+    "orientation",
+    "gyroscope",
+    "accelerometer",
+    "motion-controller",
+    "triki",
+    "zabka"
+  ],
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm run build"
+  },
+  "devDependencies": {
+    "@types/web-bluetooth": "^0.0.20",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -10,3 +10,8 @@ CLAUDE.md
 node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# packages/ build + deps (standalone package, not a workspace)
+packages/*/dist/
+packages/*/*.tgz
+packages/*/*.tsbuildinfo

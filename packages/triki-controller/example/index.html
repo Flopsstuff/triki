@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>triki-controller — minimal example</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; max-width: 40rem; }
+      button { font: inherit; padding: 0.4rem 0.8rem; margin-right: 0.5rem; }
+      pre { background: #f4f4f4; padding: 0.75rem; border-radius: 6px; min-height: 8rem; }
+    </style>
+  </head>
+  <body>
+    <h1>triki-controller</h1>
+    <p>
+      Build the package first (<code>npm install &amp;&amp; npm run build</code>), then serve this
+      folder over <code>http://localhost</code> (not <code>file://</code>) in Chrome/Edge/Opera.
+    </p>
+    <p>
+      <button id="connect">Connect</button>
+      <button id="led">Toggle LED</button>
+      <button id="reset">Reset heading</button>
+    </p>
+    <pre id="out">idle</pre>
+
+    <script type="module">
+      import { TrikiController } from "../dist/index.js";
+
+      const out = document.getElementById("out");
+      const log = (msg) => { out.textContent = msg; };
+
+      if (!TrikiController.isSupported()) {
+        log("Web Bluetooth is not available in this browser.");
+      }
+
+      const triki = new TrikiController({ fusion: true, rateHz: 104 });
+      let ledOn = false;
+      let lastHz = 0;
+
+      triki.on("connectionchange", (state) => log("state: " + state));
+      triki.on("rate", (hz) => { lastHz = hz; });
+      triki.on("orientation", (o) => {
+        const e = o.euler;
+        log(
+          `streaming ${lastHz} Hz\n` +
+            `roll ${e.roll.toFixed(1)}°  pitch ${e.pitch.toFixed(1)}°  yaw ${e.yaw.toFixed(1)}°`,
+        );
+      });
+
+      document.getElementById("connect").addEventListener("click", async () => {
+        try {
+          if (triki.isConnected) { triki.disconnect(); return; }
+          await triki.connect();
+        } catch (err) {
+          log("⚠ " + err.message);
+        }
+      });
+
+      document.getElementById("led").addEventListener("click", async () => {
+        try { ledOn = !ledOn; await triki.setLed(ledOn); } catch (err) { log("⚠ " + err.message); }
+      });
+
+      document.getElementById("reset").addEventListener("click", () => triki.resetHeading());
+    </script>
+  </body>
+</html>
