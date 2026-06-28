@@ -35,7 +35,7 @@ export interface OrientationEvent {
   quaternion: Quaternion;
   /** Tait-Bryan angles in degrees, heading offset applied. */
   euler: EulerAngles;
-  /** Which filter produced this sample (`"madgwick"` or `"vqf"`). */
+  /** Which filter produced this sample (`"madgwick"`, `"vqf"`, or `"accel"`). */
   algorithm: FusionAlgorithm;
   /** `performance.now()` timestamp in ms. */
   t: number;
@@ -61,7 +61,7 @@ export interface TrikiControllerOptions {
   /**
    * Orientation fusion algorithm, controlling whether `orientation` events fire.
    * `true` (default) ≡ `"madgwick"`; `false` ≡ `"none"`; or name an algorithm
-   * directly (`"madgwick"` | `"vqf"` | `"none"`).
+   * directly (`"madgwick"` | `"vqf"` | `"accel"` | `"none"`).
    */
   fusion?: boolean | FusionAlgorithm;
   /** Initial IMU sample rate in Hz. Default 104. */
