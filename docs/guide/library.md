@@ -171,9 +171,10 @@ Exported alongside the controller:
   drifts over time. Roll/pitch stay levelled by gravity. Call `resetHeading()` to
   re-zero yaw.
 - **Math vs display frame.** The library emits the **right-handed** math quaternion. The
-  visualizer page negates `y` and `z` (`[w, x, -y, -z]`) purely for its left-handed CSS
-  3D cube. Apply that negation yourself only if you mirror that display, and do not
-  double-negate.
+  visualizer page negates `y` and `z` (`[w, x, -y, -z]`) only for its on-screen
+  roll/pitch/yaw readout, to match the visual sense of rotation; the 3D model itself is
+  driven from the unmodified quaternion via a per-model mount offset. Apply that negation
+  yourself only if you mirror that readout, and do not double-negate.
 - **Throughput.** Above ~208 Hz, BLE may not keep up; the `rate` event reports the
   actual measured throughput so the app can react to the real frame rate, not the
   requested one.

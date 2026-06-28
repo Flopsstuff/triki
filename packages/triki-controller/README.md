@@ -89,8 +89,9 @@ Events: `frame`, `orientation` (fusion only), `connectionchange` (payload is the
 - **Yaw drift.** Fusion is 6-axis (gyro + accel, no magnetometer), so absolute heading drifts
   over time. Roll/pitch stay levelled by gravity. Call `resetHeading()` to re-zero yaw.
 - **Math vs display frame.** This library emits the **right-handed** math quaternion. The Triki
-  demo page negates `y` and `z` (`[w, x, -y, -z]`) purely for its left-handed CSS 3D cube — apply
-  that negation yourself if you mirror that display; don't double-negate.
+  demo page negates `y` and `z` (`[w, x, -y, -z]`) only for its on-screen roll/pitch/yaw readout
+  (the 3D model is driven from the unmodified quaternion) — apply that negation yourself only if
+  you mirror that readout; don't double-negate.
 - **Throughput.** Above ~208 Hz, BLE may not keep up; the `rate` event reports the actual
   measured throughput so you can react.
 

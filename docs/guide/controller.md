@@ -3,8 +3,8 @@
 <p><a href="../controller/" target="_blank" rel="noreferrer"><strong>▶ Open the live controller</strong></a> — runs in the browser, no install (Chromium-based browsers only).</p>
 
 A static page (`docs/public/controller/index.html`) that connects to the Triki token
-straight from the browser via the **Web Bluetooth API**, streams the IMU, and shows a
-live 3D cube tracking the token's orientation. No backend and no build step — it is
+straight from the browser via the **Web Bluetooth API**, streams the IMU, and drives a
+live 3D model tracking the token's orientation. No backend and no build step — it is
 published with this site and also runs locally.
 
 > The page is a thin UI over the [`triki-controller`](./library) npm package: all of the
@@ -22,8 +22,10 @@ published with this site and also runs locally.
 - Connects to the Nordic UART Service, subscribes to TX, sends the IMU start command.
 - Decodes the 14-byte frames (same math as `tools/ble_imu_stream.py`).
 - Fuses gyro + accel with a 6-axis **Madgwick AHRS** filter into an orientation
-  quaternion; renders it as a CSS-3D cube plus roll/pitch/yaw.
+  quaternion; drives a live 3D glTF model (rendered with the `<model-viewer>` web
+  component) plus a roll/pitch/yaw readout.
 - Shows per-axis accel (g) and gyro (°/s) with bar indicators and a live sample rate.
+- Cycles the IMU sample rate (0.25× … 4×) and lets you swap the displayed 3D model.
 - Toggles the green LED (control register `0x0004`).
 
 ## Browser support
@@ -60,9 +62,11 @@ Web Bluetooth is enabled with no certificate setup.
 1. Click **Connect** and pick `TRIKI <serial>` in the chooser.
 2. The page sends the start command automatically; status turns to *streaming* and the
    rate settles around **104 Hz**.
-3. Move the token — the cube follows. Flat on a table, the Z accel axis reads ≈ +1.00 g.
+3. Move the token — the 3D model follows. Flat on a table, the Z accel axis reads
+   ≈ +1.00 g. Drag the model to orbit the camera.
 4. **LED** toggles the green LED; **Reset** re-zeros the heading (yaw) only, so tilt
-   stays gravity-levelled.
+   stays gravity-levelled. The **rate** button steps the IMU sample rate
+   (0.25× = 26 Hz … 4× = 416 Hz; 1× = 104 Hz), and the dropdown switches the 3D model.
 
 ## Protocol mapping
 
@@ -72,7 +76,7 @@ the authoritative spec; the page mirrors it:
 | Item | Value |
 |---|---|
 | Service (NUS) | `6e400001-b5a3-f393-e0a9-e50e24dcca9e` |
-| RX (write) | `6e400002-…` — start command, LED nothing here |
+| RX (write) | `6e400002-…` — start command (the LED is on `…0004`, not here) |
 | TX (notify) | `6e400003-…` — 14-byte IMU frames |
 | Control (LED) | `6e400004-…` — 1-bit: `0x01` on / `0x00` off |
 | Start command | `20 10 00 D0 07 68 00 03` (write to RX) |

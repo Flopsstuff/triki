@@ -46,7 +46,7 @@ tools/       BLE tooling + scripts (tracked; .venv ignored)
 - [x] **Live accel + gyro streaming over BLE** — 8-byte start command,
       14-byte frames, decoded and verified (`tools/ble_imu_stream.py`).
       See [IMU streaming](./imu-streaming).
-- [x] In-browser [Web Bluetooth controller](./controller) with a live 3D orientation cube
+- [x] In-browser [Web Bluetooth controller](./controller) with a live 3D orientation model
 - [x] Extracted the IMU-parse + Madgwick orientation core into a reusable,
       dependency-free [`triki-controller`](https://www.npmjs.com/package/triki-controller)
       library (browser BLE client + framework-agnostic fusion math)
