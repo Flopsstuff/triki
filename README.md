@@ -74,3 +74,9 @@ Details and commands in [`tools/README.md`](tools/README.md).
   - `tools/ble_imu_stream.py` — start + decode the accel/gyro stream
 - **Web Bluetooth page** — in-browser orientation visualizer, published with the docs
   site and runnable locally: see [`docs/guide/controller.md`](docs/guide/controller.md)
+
+
+## Credits and contributors
+ - <a href="https://github.com/Piwencjusz">Piwencjusz</a> — PCB photos, NOR dump, OpenOCD probing
+ - <a href="https://github.com/moe-takasaki">tsuki</a> — Deeper dive into hw and sw RE, SEGGER/J-Link analysis
+ - <a href="https://github.com/AND-Y0">AND-Y0</a> — BLE communication protocol description
