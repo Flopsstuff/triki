@@ -53,6 +53,9 @@
   button:disabled { opacity: .45; cursor: default; }
   button.primary { background: var(--accent-dim); border-color: var(--accent); }
   button.on { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
+  .sel { font: inherit; color: var(--fg); background: var(--panel-2);
+         border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+  .sel:hover { border-color: var(--accent-dim); }
 
   .pill {
     display: inline-flex; align-items: center; gap: 6px;
@@ -83,11 +86,11 @@
   }
   .onboard ol {
     margin: 0; padding: 0; list-style: none; counter-reset: step;
-    display: flex; flex-wrap: wrap; gap: 8px 20px;
+    display: flex; flex-direction: column; gap: 8px;
   }
   .onboard li {
     counter-increment: step; position: relative; padding-left: 30px;
-    flex: 1 1 200px; min-width: 190px; color: var(--fg);
+    color: var(--fg);
   }
   .onboard li::before {
     content: counter(step); position: absolute; left: 0; top: -1px;
@@ -110,39 +113,10 @@
     color: var(--muted); margin: 0 0 10px; font-weight: 600;
   }
 
-  /* 3D scene — flat cylinder (bottle-cap) model, built in JS */
-  .scene { perspective: 900px; height: 430px; display: grid; place-items: center; }
-  .model { position: relative; width: 0; height: 0; transform-style: preserve-3d; }
-  /* axis of the disc points along the model Z; rotateX lays the Y-built cylinder flat,
-     scale3d enlarges the whole cap (render() overwrites .model's transform each frame,
-     so the scale lives here on .cap instead) */
-  .cap   { position: relative; transform-style: preserve-3d;
-           transform: rotateX(90deg) scale3d(1.85, 1.85, 1.85); }
-  .cap > * { position: absolute; transform-style: preserve-3d; backface-visibility: hidden; }
-
-  .disc {
-    width: 120px; height: 120px; margin: -60px; border-radius: 50%;
-    border: 1px solid rgba(255,255,255,.22);
-  }
-  /* .disc.top = T face / bottle-cap side (accel Z = -1): silver, Triki "T" — the "tails" view */
-  .disc.top    { background: radial-gradient(circle at 38% 32%, #d9dee4, #aab2bc 68%, #899099);
-                 transform: rotateX( 90deg) translateZ(11px); }
-  /* .disc.bottom = Ż face / Żabka side (accel Z = +1): green, Żabka "Ż" — the "heads" view */
-  .disc.bottom { background: radial-gradient(circle at 38% 32%, #5fce97, #3fae79 68%, #2f8e69);
-                 transform: rotateX(-90deg) translateZ(11px); }
-
-  .seg { backface-visibility: hidden; } /* size/transform/background set in JS */
-
-  /* brand letter centred on a disc face — also serves as the rotation reference */
-  .glyph {
-    position: absolute; inset: 0; display: grid; place-items: center;
-    font: 800 64px/1 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
-    backface-visibility: hidden; pointer-events: none; user-select: none;
-  }
-  .glyph.t { color: #485460;                /* dark grey on the silver face */
-             transform: rotateZ(180deg); }  /* this face is X-flipped → upright the glyph */
-  .glyph.z { color: #eafff5;                /* light on the green face      */
-             text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  /* 3D scene — holds the glTF model-viewer (fills the panel box) */
+  .scene { position: relative; height: 430px; }
+  .mv { position: absolute; inset: 0; width: 100%; height: 100%;
+        background: transparent; --poster-color: transparent; }
 
   .rpy { display: flex; justify-content: space-around; margin-top: 8px;
          color: var(--muted); font-size: 12px; }
@@ -200,8 +174,11 @@
   <button id="conn" class="primary">Connect</button>
   <button id="led" disabled>LED</button>
   <button id="rate">1x</button>
-  <button id="pose">Heads</button>
   <button id="reset" disabled>Reset</button>
+  <select id="modelSel" class="sel" title="3D model">
+    <option value="./triki_texture.glb">Triki</option>
+    <option value="https://modelviewer.dev/shared-assets/models/Astronaut.glb">Astronaut</option>
+  </select>
   <span class="spacer"></span>
   <span id="status" class="pill idle"><span class="dot"></span><span id="statusText">disconnected</span></span>
   <span id="sig" class="pill idle"><span class="dot"></span><span id="sigText">—</span></span>
@@ -211,8 +188,7 @@
   <h2>Getting started</h2>
   <ol>
     <li><b>Wake the token</b> — press the button on the cap so it starts advertising.</li>
-    <li>Click <b>Connect</b> above.</li>
-    <li><b>Allow Bluetooth</b> when the browser (or the OS) asks for access.</li>
+    <li>Click <b>Connect</b> above (and <b>allow Bluetooth</b> when the browser or the OS asks for access).</li>
     <li>Pick your <b>TRIKI …</b> device in the chooser popup — streaming then starts automatically.</li>
   </ol>
 </section>
@@ -221,13 +197,10 @@
   <div class="panel">
     <h2>Orientation</h2>
     <div class="scene">
-      <div class="model" id="model">
-        <div class="cap" id="cap">
-          <!-- 24 rim segments injected by buildCap() -->
-          <div class="disc bottom"><span class="glyph z">Ż</span></div>
-          <div class="disc top"><span class="glyph t">T</span></div>
-        </div>
-      </div>
+      <!-- glTF model (model-viewer); the model is chosen with #modelSel. -->
+      <model-viewer id="mv" class="mv" camera-controls interaction-prompt="none"
+        camera-orbit="90deg 70deg auto" disable-zoom tone-mapping="neutral"
+        shadow-intensity="0.6" exposure="0.85"></model-viewer>
     </div>
     <div class="rpy">
       <span>roll <b id="roll">0°</b></span>
@@ -255,23 +228,22 @@
 
 <p class="hint">
   Lay the token flat → the Z accel axis should read ≈ <b>+1.00 g</b>. Yaw drifts over
-  time (6-axis fusion, no magnetometer) — use <b>Reset heading</b> to re-zero it.
-  The view button steps the camera 90° about X each press —
-  <b>Heads</b> (Ż / green Żabka logo, top-down) → <b>Edge</b> → <b>Tails</b> (T / bottle-cap face) → <b>Edge</b> → …
-  An <b>Edge</b> view renders a vertically-held token face-on (1:1 with the screen).
+  time (6-axis fusion, no magnetometer) — use <b>Reset</b> to re-zero it.
+  Drag the model to orbit the camera; pick the 3D model with the dropdown.
   The rate button steps the IMU sample rate <b>0.25x</b> (26 Hz) → <b>4x</b> (416 Hz);
   1x = 104 Hz. Above ~208 Hz BLE may not keep up — watch the actual <i>streaming NNN Hz</i>.
   Only one BLE central can hold the token at a time: close any running bleak script first.
 </p>
 
+<!-- model-viewer web component (registers the <model-viewer> element). -->
+<script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
 <script type="module">
 // This page is a thin UI shell over the `triki-controller` npm package, loaded from
 // a CDN. The package owns all of the moving parts: Web Bluetooth, the 14-byte frame
-// parser, the Madgwick fusion and the heading reset. The page only renders — the 3D
-// cap model, the accel/gyro readouts, the status/signal pills and the camera/rate
-// controls — and maps the package's right-handed math-frame quaternion into the
-// left-handed CSS display frame (see qShow in render()).
-import { TrikiController, eulerOf } from "https://esm.sh/triki-controller@0.1.0";
+// parser, the Madgwick fusion and the heading reset. The page only renders — the glTF
+// model (via model-viewer), the accel/gyro readouts, the status/signal pills and the
+// model/rate controls.
+import { TrikiController, eulerOf, quatMul, quatAboutZ } from "https://esm.sh/triki-controller@0.1.0";
 
 // ---------------------------------------------------------------------------
 // Sample-rate presets for the cycle button. Each Hz value must be in the package's
@@ -296,32 +268,12 @@ const GYRO_RANGE  = 500.0;   // ±500 °/s (bars clamp beyond)
 // ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const els = {
-  conn: $("conn"), led: $("led"), reset: $("reset"), pose: $("pose"), rate: $("rate"),
+  conn: $("conn"), led: $("led"), reset: $("reset"), rate: $("rate"),
   status: $("status"), statusText: $("statusText"), sig: $("sig"), sigText: $("sigText"),
-  model: $("model"), cap: $("cap"), roll: $("roll"), pitch: $("pitch"), yaw: $("yaw"),
+  mv: $("mv"), modelSel: $("modelSel"),
+  roll: $("roll"), pitch: $("pitch"), yaw: $("yaw"),
   log: $("log"),
 };
-
-// Build the flat-cylinder (bottle-cap) model: 24 rim segments around a Y-axis cylinder
-// (the .cap wrapper's rotateX(90deg) then lays the axis along model Z). One segment is
-// coloured as an index so rotation is unambiguous.
-function buildCap() {
-  const N = 24, R = 60, T = 22;
-  const apothem = R * Math.cos(Math.PI / N);
-  const W = 2 * R * Math.sin(Math.PI / N) + 0.6; // chord + slight overlap to hide seams
-  for (let i = 0; i < N; i++) {
-    const seg = document.createElement("div");
-    seg.className = "seg";
-    seg.style.width = W + "px";
-    seg.style.height = T + "px";
-    seg.style.marginLeft = (-W / 2) + "px";
-    seg.style.marginTop = (-T / 2) + "px";
-    seg.style.transform = `rotateY(${i * 360 / N}deg) translateZ(${apothem}px)`;
-    seg.style.background = i % 2 ? "#7e868f" : "#9aa2ac"; // grey crimped-edge stripes
-    els.cap.insertBefore(seg, els.cap.firstChild);
-  }
-}
-buildCap();
 
 function buildAxisRows(table) {
   const rows = {};
@@ -373,26 +325,6 @@ function setState(s) {
   }
 }
 
-// quaternion -> CSS matrix3d (column-major 4x4). Kept here, not in the package: it is a
-// pure presentation concern, tied to the CSS 3D coordinate frame.
-function quatToMatrix3d([w, x, y, z]) {
-  const r00 = 1 - 2*(y*y + z*z), r01 = 2*(x*y - w*z),     r02 = 2*(x*z + w*y);
-  const r10 = 2*(x*y + w*z),     r11 = 1 - 2*(x*x + z*z), r12 = 2*(y*z - w*x);
-  const r20 = 2*(x*z - w*y),     r21 = 2*(y*z + w*x),     r22 = 1 - 2*(x*x + y*y);
-  // column-major: col0, col1, col2, col3
-  return `matrix3d(${r00},${r10},${r20},0, ${r01},${r11},${r21},0, ${r02},${r12},${r22},0, 0,0,0,1)`;
-}
-
-// Camera presets cycled on each view-button press — a 90° step about X each time:
-//   heads (Ż / green Żabka face, accel Z=+1, top-down) → edge → tails (T / bottle-cap face, Z=-1) → edge …
-const VIEWS = [
-  { name: "Heads", css: "" },                  // Ż / Żabka face up (Z=+1), token flat, top-down (default)
-  { name: "Edge",  css: "rotateX(90deg) " },   // on the rim — vertical token renders face-on
-  { name: "Tails", css: "rotateX(180deg) " },  // T / bottle-cap face (Z=-1)
-  { name: "Edge",  css: "rotateX(270deg) " },  // on the rim, other side
-];
-let viewIdx = 0;
-
 // ---------------------------------------------------------------------------
 // Controller — the package does BLE + parse + fusion; we just consume its events.
 // ---------------------------------------------------------------------------
@@ -424,6 +356,7 @@ triki.on("connectionchange", (s) => {
     latestFrame = null; latestOrient = null; currentHzVal = 0;
     els.sigText.textContent = "—";
     els.sig.className = "pill idle";
+    setRestPose();
     log("• disconnected");
   }
 });
@@ -442,6 +375,69 @@ function updateSignal() {
     els.sig.className = "pill idle";
   }
 }
+
+// ---------------------------------------------------------------------------
+// glTF model (model-viewer), driven by the fusion quaternion. Each mesh is authored in
+// its own frame, so every model carries a "fixture" describing how it is mounted relative
+// to the token's IMU axes (see assets/axes.jpg): `mountDeg` rotates the mesh about the
+// token's vertical, `order`/`sign` remap the [roll, pitch, yaw] euler. Tune a model live
+// with __mountYaw / __mvMap, then bake the result into MODEL_FIXTURES below.
+// ---------------------------------------------------------------------------
+const MODEL_SRC = "./triki_texture.glb"; // default model; the dropdown switches it (see #modelSel)
+
+// Per-model fixtures, keyed by model src.
+const MODEL_FIXTURES = {
+  "./triki_texture.glb":                                        { mountDeg: -90, order: [0, 1, 2], sign: [1, 1, 1] },
+  "https://modelviewer.dev/shared-assets/models/Astronaut.glb": { mountDeg: 90, order: [0, 1, 2], sign: [1, 1, 1] },
+};
+const DEFAULT_FIXTURE = { mountDeg: 0, order: [0, 1, 2], sign: [1, 1, 1] };
+
+let mvReady = false;
+const mvMap = { order: [0, 1, 2], sign: [1, 1, 1] }; // active [roll, pitch, yaw] remap (set per model)
+let mountQ = quatAboutZ(0);                          // active mount rotation (set per model)
+
+// Load a model's fixture into the active mvMap/mountQ (called whenever a model loads).
+function applyFixture(src) {
+  const f = MODEL_FIXTURES[src] || DEFAULT_FIXTURE;
+  mvMap.order = f.order.slice();
+  mvMap.sign = f.sign.slice();
+  mountQ = quatAboutZ(f.mountDeg * Math.PI / 180);
+}
+
+// Fusion quaternion -> model-viewer "roll pitch yaw" string (mount offset + mvMap remap).
+function mvOrientation(q) {
+  const em = eulerOf(quatMul(q, mountQ));
+  const v = [em.roll, em.pitch, em.yaw];
+  return mvMap.order.map((idx, i) => (mvMap.sign[i] * v[idx]).toFixed(1) + "deg").join(" ");
+}
+// Rest pose (token at identity): shown before connecting and after disconnect so the
+// static model carries the same mount rotation as the live stream.
+function setRestPose() { if (els.mv) els.mv.orientation = mvOrientation([1, 0, 0, 0]); }
+
+function loadModel(src) {
+  if (!src) return;
+  applyFixture(src); // load this model's mount + axis remap
+  mvReady = false; // pause driving until the new model has loaded
+  els.mv.addEventListener("load",  () => { mvReady = true; setRestPose(); log("• model loaded: " + src); }, { once: true });
+  els.mv.addEventListener("error", () => { mvReady = false; log("⚠ model load failed: " + src); }, { once: true });
+  els.mv.src = src;
+}
+els.modelSel.value = MODEL_SRC;
+loadModel(MODEL_SRC);
+els.modelSel.addEventListener("change", () => loadModel(els.modelSel.value));
+
+// Dev hooks: swap the model / tune the axis mapping live, no redeploy needed.
+//   __setModel('./triki.glb')         load a different file
+//   __mvMap('2,1,0', '1,-1,1')        permute + sign-flip [roll,pitch,yaw] until it tracks
+window.__setModel = (url) => { els.modelSel.value = url; loadModel(url); };
+window.__mvMap = (orderCsv, signCsv) => {
+  if (orderCsv) mvMap.order = orderCsv.split(",").map(Number);
+  if (signCsv)  mvMap.sign  = signCsv.split(",").map(Number);
+  setRestPose();
+  console.log("mvMap =", JSON.stringify(mvMap));
+};
+//   __mountYaw(90)  rotate the mesh about the token's vertical until tilt axes match the token
+window.__mountYaw = (deg) => { mountQ = quatAboutZ(+deg * Math.PI / 180); setRestPose(); console.log("mountYaw =", +deg); };
 
 // ---------------------------------------------------------------------------
 // Render loop — DOM only; BLE/parse/fusion already ran inside the package.
@@ -467,14 +463,14 @@ function render() {
   if (latestOrient) {
     // quaternion already carries the heading offset (applied inside the package).
     const qd = latestOrient.quaternion;
-    // CSS is left-handed (Y points down), the IMU/fusion frame is right-handed, so the
-    // sense of rotation about Y and Z comes out reversed. Negating q.y and q.z (a
-    // conjugation by 180° about X) flips exactly those two and leaves X untouched —
-    // done only for display, the package's quaternion stays consistent.
-    const qShow = [qd[0], qd[1], -qd[2], -qd[3]];
-    els.model.style.transform = VIEWS[viewIdx].css + quatToMatrix3d(qShow);
 
-    const e = eulerOf(qShow);
+    // Drive the glTF model: apply the mesh<->IMU mount offset (constant rotation about
+    // the token's vertical), then convert to model-viewer's "roll pitch yaw" euler and
+    // remap via mvMap (both tunable live: __mountYaw / __mvMap).
+    if (mvReady) els.mv.orientation = mvOrientation(qd);
+
+    // roll/pitch/yaw readout (y/z negated to match the on-screen sense of rotation).
+    const e = eulerOf([qd[0], qd[1], -qd[2], -qd[3]]);
     els.roll.textContent  = e.roll.toFixed(0)  + "°";
     els.pitch.textContent = e.pitch.toFixed(0) + "°";
     els.yaw.textContent   = e.yaw.toFixed(0)   + "°";
@@ -518,12 +514,6 @@ els.led.addEventListener("click", async () => {
 els.reset.addEventListener("click", () => {
   triki.resetHeading();
   log("• heading reset");
-});
-
-els.pose.addEventListener("click", () => {
-  viewIdx = (viewIdx + 1) % VIEWS.length;
-  els.pose.textContent = VIEWS[viewIdx].name;
-  log("• view: " + VIEWS[viewIdx].name);
 });
 
 // Sample-rate cycle. setRate() re-sends START live when streaming; otherwise it just
