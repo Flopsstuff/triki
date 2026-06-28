@@ -274,20 +274,33 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
     await this.#write(this.#rxChar, startCmd(this.#rateHz), true);
 
     this.#startRateTimer();
-    void this.#startBattery(); // async, best-effort; never blocks streaming
+    void this.#startBattery(this.#gatt); // async, best-effort; never blocks streaming
     this.#setState("streaming");
   }
 
-  /** Read the battery level once and subscribe to updates, if the service exists. */
-  async #startBattery(): Promise<void> {
-    if (!this.#gatt) return;
+  /**
+   * Read the battery level once and subscribe to updates, if the service exists.
+   * Fire-and-forget: `gatt` pins the session, and we bail after each await once it is
+   * no longer the active connection so a stale read/listener can't outlive cleanup.
+   */
+  async #startBattery(gatt: BluetoothRemoteGATTServer | null): Promise<void> {
+    if (!gatt) return;
     try {
-      const svc = await this.#gatt.getPrimaryService(BATTERY_SERVICE);
-      this.#batteryChar = await svc.getCharacteristic(BATTERY_LEVEL);
-      this.#emitBattery(await this.#batteryChar.readValue());
+      const svc = await gatt.getPrimaryService(BATTERY_SERVICE);
+      if (this.#gatt !== gatt) return;
+      const char = await svc.getCharacteristic(BATTERY_LEVEL);
+      if (this.#gatt !== gatt) return;
+      const value = await char.readValue();
+      if (this.#gatt !== gatt) return;
+      this.#emitBattery(value);
+      this.#batteryChar = char;
       try {
-        await this.#batteryChar.startNotifications();
-        this.#batteryChar.addEventListener("characteristicvaluechanged", this.#onBattery);
+        await char.startNotifications();
+        if (this.#gatt !== gatt) {
+          this.#batteryChar = null; // disconnected mid-subscribe; don't leak a listener
+          return;
+        }
+        char.addEventListener("characteristicvaluechanged", this.#onBattery);
       } catch {
         this.#batteryChar = null; // notifications unsupported; the one-time read stands
       }
