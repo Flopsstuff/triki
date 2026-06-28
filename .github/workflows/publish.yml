@@ -46,6 +46,16 @@ jobs:
             exit 1
           fi
 
+      # Manual runs can target any ref; only allow publishing from main so a
+      # workflow_dispatch never ships unreleased code from a feature branch.
+      - name: Verify manual runs target main
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "main" ]; then
+            echo "::error::workflow_dispatch publishing is only allowed from main"
+            exit 1
+          fi
+
       # prepublishOnly runs `typecheck` + `build`; provenance is auto-attached
       # by npm under trusted publishing. A prerelease version (one with a hyphen,
       # e.g. 0.2.0-alpha.0) goes to the `next` dist-tag so it never becomes the
