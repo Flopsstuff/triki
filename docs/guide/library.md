@@ -1,0 +1,186 @@
+# triki-controller (npm package)
+
+[![npm](https://img.shields.io/npm/v/triki-controller.svg)](https://www.npmjs.com/package/triki-controller)
+
+`triki-controller` is the reusable core of the [Web Bluetooth controller](./controller)
+shipped as a dependency-free, strongly-typed **TypeScript** package. It connects to the
+Triki token over the Nordic UART Service, starts the IMU stream, parses the 14-byte
+[motion frames](./imu-streaming), and (optionally) fuses orientation with a 6-axis
+**Madgwick** filter, so any web app can reuse the token as a motion controller.
+
+- **npm:** [`triki-controller`](https://www.npmjs.com/package/triki-controller)
+- **Source + README:** [`packages/triki-controller`](https://github.com/Flopsstuff/triki/tree/main/packages/triki-controller#readme)
+- Zero runtime dependencies, ESM-only, ships its own `.d.ts`.
+
+The visualizer page and this package share the same parsing and fusion math; the
+[BLE protocol](./ble-protocol) and [IMU streaming](./imu-streaming) pages are the
+authoritative spec.
+
+## Install
+
+```sh
+npm install triki-controller
+```
+
+## Browser support
+
+`TrikiController` uses the **Web Bluetooth API**, so the same constraints as the
+[live controller](./controller#browser-support) apply:
+
+- Desktop **Chrome / Edge / Opera** (Chromium). **Safari and Firefox** do not implement
+  Web Bluetooth.
+- A **secure context** is required: `https://` or `http://localhost`, never `file://`.
+- `connect()` must run inside a **user gesture** (e.g. a click handler).
+- Only one BLE central holds the token at a time.
+
+`TrikiController.isSupported()` returns `false` (rather than throwing) wherever Web
+Bluetooth is missing, so it is safe to call during SSR.
+
+## Quick start
+
+```ts
+import { TrikiController } from "triki-controller";
+
+if (!TrikiController.isSupported()) {
+  throw new Error("This browser has no Web Bluetooth.");
+}
+
+const triki = new TrikiController({ fusion: true, rateHz: 104 });
+
+triki.on("connectionchange", (state) => {
+  // "disconnected" | "pairing" | "streaming"
+  console.log("state:", state);
+});
+
+triki.on("frame", (f) => {
+  // f.gyro = { x, y, z } in deg/s, f.accel = { x, y, z } in g, f.t = ms
+});
+
+triki.on("orientation", (o) => {
+  // o.quaternion = [w, x, y, z] (right-handed), o.euler = { roll, pitch, yaw } in degrees
+});
+
+triki.on("rate", (hz) => console.log("streaming", hz, "Hz"));
+
+// Must be inside a click/tap handler:
+document.querySelector("#connect")!.addEventListener("click", async () => {
+  await triki.connect();      // shows the device picker, starts streaming
+  await triki.setLed(true);   // green LED on
+  await triki.setRate(208);   // 26 / 52 / 104 / 208 / 416 Hz
+  triki.resetHeading();       // re-zero yaw whenever you like
+});
+```
+
+For raw frames without fusion, construct with `{ fusion: false }` and listen to
+`"frame"` only; the `orientation` event is then never emitted.
+
+## Events
+
+`TrikiController` is a typed emitter. `on(type, cb)` and `once(type, cb)` return an
+unsubscribe function; `off(type, cb)` removes a listener.
+
+| Event | Payload | When |
+|---|---|---|
+| `frame` | `FrameEvent` | every decoded motion frame |
+| `orientation` | `OrientationEvent` | every frame, **fusion only** |
+| `connectionchange` | `ConnectionState` (string) | state transitions |
+| `rate` | `number` (Hz) | ~once per second, measured throughput |
+
+```ts
+interface FrameEvent {
+  raw:   { gx: number; gy: number; gz: number; ax: number; ay: number; az: number }; // int16 counts
+  gyro:  { x: number; y: number; z: number };  // deg/s
+  accel: { x: number; y: number; z: number };  // g
+  t: number;                                    // performance.now() ms
+}
+
+interface OrientationEvent {
+  quaternion: readonly [w: number, x: number, y: number, z: number]; // right-handed
+  euler: { roll: number; pitch: number; yaw: number };               // degrees
+  t: number;
+}
+```
+
+## API
+
+`new TrikiController(options?)`:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `fusion` | `true` | run Madgwick fusion and emit `orientation` |
+| `rateHz` | `104` | initial IMU sample rate |
+| `beta` | `0.08` | Madgwick filter gain |
+| `gyroScale` | `14.286` | gyro scale in LSB per deg/s (LSM6DSL ±2000 dps) |
+
+| Member | Description |
+|---|---|
+| `static isSupported()` | `true` when `navigator.bluetooth` exists (SSR-safe). |
+| `connect()` | Show the picker, connect, start streaming. User gesture required. |
+| `reconnect()` | Reconnect to the last paired device without the picker. |
+| `disconnect()` | Disconnect. |
+| `setLed(on)` | Green LED on/off (throws if the token has no LED characteristic). |
+| `setRate(hz)` | Set the sample rate; applied live when streaming. |
+| `resetHeading()` | Re-zero yaw (no-op when fusion is off). |
+| `setGyroScale(scale)` | Runtime gyro calibration. |
+| `isConnected` / `state` / `rateHz` / `hasLed` / `fusion` | Getters. |
+
+`connect()` rejects (after cleaning up) if pairing or the handshake fails, so wrap it in
+`try/catch` to surface picker errors. `reconnect()` reuses the cached device and throws
+if `connect()` was never called.
+
+## Standalone primitives
+
+The parsing, fusion and protocol code is pure and **environment-agnostic** (no DOM, no
+Bluetooth), so it works in Node or a worker. This is the seam for a non-browser
+transport, for example a native bridge that owns its own BLE stack and only reuses the
+math.
+
+```ts
+import { FrameParser, MadgwickAHRS, startCmd, decodeCounts } from "triki-controller";
+
+const parser = new FrameParser();
+const madgwick = new MadgwickAHRS({ beta: 0.08 });
+
+// Feed your own BLE notification bytes (from any transport):
+for (const f of parser.push(notificationBytes)) {
+  const gx = f.gxRaw / 14.286, gy = f.gyRaw / 14.286, gz = f.gzRaw / 14.286; // deg/s
+  const ax = f.axRaw / 2048, ay = f.ayRaw / 2048, az = f.azRaw / 2048;       // g
+  madgwick.update(gx, gy, gz, ax, ay, az, 1 / 104);
+}
+console.log(madgwick.euler()); // { roll, pitch, yaw } in degrees
+
+// startCmd(hz) builds the 8-byte START payload to write to RX:
+await rxCharacteristic.writeValue(startCmd(208));
+```
+
+Exported alongside the controller:
+
+- `MadgwickAHRS` — 6-axis filter: `update(gx, gy, gz, ax, ay, az, dt)`, `quaternion()`,
+  `euler()`, `reset()`.
+- `FrameParser` — stateful framer with header resync: `push(chunk) => RawFrame[]`,
+  `reset()`. `decodeCounts(frame)` decodes a single 14-byte frame.
+- `startCmd(hz)` / `ledCmd(on)` — command builders.
+- Quaternion helpers `quatMul` / `quatAboutZ` / `yawRadOf` / `eulerOf`.
+- Constants: `NUS_SERVICE` / `NUS_RX` / `NUS_TX` / `NUS_CTRL`, `START_BASE`,
+  `FRAME_LEN`, `SUPPORTED_RATES_HZ` (`[26, 52, 104, 208, 416]`), `DEFAULT_RATE_HZ`,
+  `DEFAULT_GYRO_SCALE`, `DEFAULT_ACCEL_SCALE`, `DEFAULT_BETA`.
+
+## Caveats
+
+- **Yaw drift.** Fusion is 6-axis (gyro + accel, no magnetometer), so absolute heading
+  drifts over time. Roll/pitch stay levelled by gravity. Call `resetHeading()` to
+  re-zero yaw.
+- **Math vs display frame.** The library emits the **right-handed** math quaternion. The
+  visualizer page negates `y` and `z` (`[w, x, -y, -z]`) purely for its left-handed CSS
+  3D cube. Apply that negation yourself only if you mirror that display, and do not
+  double-negate.
+- **Throughput.** Above ~208 Hz, BLE may not keep up; the `rate` event reports the
+  actual measured throughput so the app can react to the real frame rate, not the
+  requested one.
+- **No native joystick.** A browser cannot emit a real joystick / HID gamepad. Turning
+  the orientation stream into OS-level input still needs a native helper or a
+  WebSocket / WebHID side channel (see the roadmap on the [Overview](./overview#status)).
+
+## License
+
+MIT.

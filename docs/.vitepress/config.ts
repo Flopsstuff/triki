@@ -30,6 +30,7 @@ export default defineConfig({
         text: 'Controller',
         items: [
           { text: 'Web Bluetooth controller', link: '/guide/controller' },
+          { text: 'npm package (triki-controller)', link: '/guide/library' },
         ],
       },
     ],

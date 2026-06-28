@@ -16,8 +16,8 @@ hero:
       text: Overview
       link: /guide/overview
     - theme: alt
-      text: IMU streaming
-      link: /guide/imu-streaming
+      text: Demo
+      link: /controller
     - theme: alt
       text: View on GitHub
       link: https://github.com/Flopsstuff/triki
@@ -32,12 +32,9 @@ features:
   - title: IMU streaming
     details: Live accelerometer + gyroscope over BLE via an 8-byte start command and 14-byte motion frames.
     link: /guide/imu-streaming
-  - title: Web Bluetooth controller
-    details: An in-browser page that streams the IMU and shows a live 3D orientation cube — no backend.
-    link: /guide/controller
-  - title: Tooling
-    details: bleak scripts for scanning, GATT dumps, and decoding the IMU stream.
-    link: /guide/tooling
+  - title: triki-controller (npm)
+    details: A dependency-free TypeScript package — connect over Web Bluetooth, stream the IMU, and read fused Madgwick orientation in your own app.
+    link: /guide/library
 ---
 
 <div style="text-align:center; margin:2.5rem 0 0.5rem;">

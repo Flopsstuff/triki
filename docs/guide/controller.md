@@ -7,6 +7,9 @@ token straight from the browser via the **Web Bluetooth API**, streams the IMU, 
 shows a live 3D cube tracking the token's orientation. No backend, no build, no
 dependencies — it is published with this site and also runs locally.
 
+> Want this in your own app? The same connect / parse / fusion core is published as the
+> [`triki-controller`](./library) npm package.
+
 > OPSEC: the page stores **no device identifiers** — the browser's device picker
 > selects the token at runtime. Keep the serial / MAC / host UUID out of any tracked
 > file; this doc uses `<serial>` / `XX:XX:XX:XX:XX:XX` placeholders.
@@ -77,7 +80,7 @@ the authoritative spec; the page mirrors it:
 | Start command | `20 10 00 D0 07 68 00 03` (write to RX) |
 | Frame | `22 00 \| gyroX gyroY gyroZ \| accelX accelY accelZ` |
 | Each axis | signed int16, little-endian |
-| Scales | gyro / 131.0 (°/s), accel / 2048.0 (g) |
+| Scales | gyro / 14.286 (°/s), accel / 2048.0 (g) |
 
 ## Limitations
 
