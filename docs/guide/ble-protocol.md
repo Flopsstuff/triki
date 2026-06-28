@@ -23,6 +23,34 @@ Battery 0x180F → 0x2A19 (Battery Level)
 The token speaks a **request/response protocol over NUS**: TX stays silent until a
 command arrives on RX.
 
+## Device Information Service (`0x180A`)
+
+Besides the NUS, the token also exposes the standard **Generic Access** (`0x1800`)
+and **Device Information** (`0x180A`) services. An independent reader
+([TrikiReader](https://github.com/AND-Y0/TrikiReader)) reads the full set below;
+confirm per-device with [`tools/ble_dump.py`](./tooling) before relying on any one
+field — not every unit necessarily populates all of them.
+
+| Characteristic | UUID | Notes |
+|---|---|---|
+| Device Name | `0x2A00` (on `0x1800`) | `Triki <serial>` |
+| Manufacturer Name | `0x2A29` | string |
+| Model Number | `0x2A24` | string |
+| Firmware Revision | `0x2A26` | version string (e.g. `X.Y.Z`) |
+| Hardware Revision | `0x2A27` | string |
+| Software Revision | `0x2A28` | string |
+| Serial Number | `0x2A25` | per-device — **not recorded here** |
+| System ID | `0x2A23` | 8-byte, per-device — **not recorded here** |
+| PnP ID | `0x2A50` | source + vendor / product / version IDs |
+
+`PnP ID` (`0x2A50`) is the standard 7-byte record
+`[source][vendorId LE][productId LE][versionId LE]`, where source `0x01` = Bluetooth
+SIG, `0x02` = USB — a potential lead on the vendor/product identity.
+
+> **OPSEC:** Serial Number, System ID and the advertised `<serial>` are per-device
+> identifiers — keep them out of tracked files (use placeholders `<serial>` /
+> `XX:XX:XX:XX:XX:XX`).
+
 ## Control register 0x0004 — green LED
 
 - **1-bit flag.** Writes saturate: `0x00` → reads back `0x00`; any value `>= 0x01`

@@ -44,6 +44,3 @@ features:
   <a href="controller/" target="_blank" rel="noreferrer"><strong>▶ Open the live Web Bluetooth controller</strong></a>
   <div style="opacity:0.7; font-size:0.9em;">streams the token's motion in a Chromium browser — no install</div>
 </div>
-
-> Personal project on my own device. No device-identifying values (serial, BLE MAC)
-> are published — the browser's device picker selects the token at runtime.

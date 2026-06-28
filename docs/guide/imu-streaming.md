@@ -18,10 +18,13 @@ Write to RX `…0002`:
 The device then pushes 14-byte frames on TX `…0003`:
 
 ```
-22 00 | gyroX gyroY gyroZ | accelX accelY accelZ
+offset  0    2     4     6      8      10     12
+        22 00 gyroX gyroY gyroZ accelX accelY accelZ
+header ─┘     └──────────────── 6 × int16 LE ──────┘
 ```
 
-Each axis is a signed int16, little-endian. Scales:
+Bytes 0–1 are the `22 00` header; the six axes follow as signed int16,
+little-endian at offsets 2 / 4 / 6 (gyro) and 8 / 10 / 12 (accel). Scales:
 
 - **gyro / 14.286** → deg/s — LSM6DSL ±2000 dps (70 mdps/LSB). The older `131.0`
   was an MPU-6050 ±250 dps value carried over from notes; it under-rotated ~9×.
@@ -29,6 +32,14 @@ Each axis is a signed int16, little-endian. Scales:
 
 Frames arrive in bursts at ~104 Hz (the default; the rate is selectable — see
 [Sample rate](./ble-protocol#sample-rate-odr)).
+
+### Startup behaviour
+
+- The **first ~20 frames after start are noise** — discard them before trusting the
+  data (to be verified).
+- For a clean gravity/zero baseline, let the token sit **flat and still** for a moment
+  before sending the start command.
+- There is no stop opcode: the stream ends when you disconnect.
 
 ## Verification
 
