@@ -34,6 +34,20 @@ import type {
 
 const ZERO_VEC3: Vec3 = { x: 0, y: 0, z: 0 };
 
+/** Finite, strictly-positive number or the fallback (guards gyro-scale div-by-zero). */
+function finitePositive(v: number, fallback: number): number {
+  return Number.isFinite(v) && v > 0 ? v : fallback;
+}
+
+/** Defensive copy of a Vec3 with non-finite components coerced to 0. */
+function copyVec3(v: Vec3): Vec3 {
+  return {
+    x: Number.isFinite(v.x) ? v.x : 0,
+    y: Number.isFinite(v.y) ? v.y : 0,
+    z: Number.isFinite(v.z) ? v.z : 0,
+  };
+}
+
 /** Resolve the `fusion` option: `true`→madgwick, `false`→none, string→passthrough. */
 function resolveFusion(opt: boolean | FusionAlgorithm | undefined): FusionAlgorithm {
   if (opt === undefined || opt === true) return "madgwick";
@@ -72,9 +86,9 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
     super();
     this.#algo = resolveFusion(options.fusion);
     this.#rateHz = options.rateHz ?? DEFAULT_RATE_HZ;
-    this.#gyroScale = options.gyroScale ?? DEFAULT_GYRO_SCALE;
-    this.#gyroBias = options.gyroBias ?? { ...ZERO_VEC3 };
-    this.#accelBias = options.accelBias ?? { ...ZERO_VEC3 };
+    this.#gyroScale = finitePositive(options.gyroScale ?? DEFAULT_GYRO_SCALE, DEFAULT_GYRO_SCALE);
+    this.#gyroBias = copyVec3(options.gyroBias ?? ZERO_VEC3);
+    this.#accelBias = copyVec3(options.accelBias ?? ZERO_VEC3);
     this.#beta = options.beta ?? DEFAULT_BETA;
     this.#tauAcc = options.tauAcc ?? DEFAULT_TAU_ACC;
     this.#filter = this.#makeFilter(this.#algo);
@@ -221,19 +235,19 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
     if (this.#filter instanceof VqfAHRS) this.#filter.setTauAcc(tau);
   }
 
-  /** Runtime gyro-scale calibration (LSB per deg/s). */
+  /** Runtime gyro-scale calibration (LSB per deg/s). Ignores non-finite or ≤0 values. */
   setGyroScale(scale: number): void {
-    this.#gyroScale = scale;
+    this.#gyroScale = finitePositive(scale, this.#gyroScale);
   }
 
-  /** Per-axis gyro correction (deg/s), subtracted from every sample. */
+  /** Per-axis gyro correction (deg/s), subtracted from every sample. Stored as a copy. */
   setGyroBias(bias: Vec3): void {
-    this.#gyroBias = bias;
+    this.#gyroBias = copyVec3(bias);
   }
 
-  /** Per-axis accel correction (g), subtracted from every sample. */
+  /** Per-axis accel correction (g), subtracted from every sample. Stored as a copy. */
   setAccelBias(bias: Vec3): void {
-    this.#accelBias = bias;
+    this.#accelBias = copyVec3(bias);
   }
 
   // --- internal ----------------------------------------------------------------
