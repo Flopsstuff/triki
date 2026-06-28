@@ -10,15 +10,15 @@ shaped like a bottle cap (crown cap), built around an **nRF52810** BLE SoC and a
 **LSM6DSL** accelerometer/gyroscope. The goal of this project is to read the token's
 motion sensors over BLE and reuse it as a **motion controller**.
 
-> Personal project on my own device. No device-identifying values (serial, BLE MAC)
-> are published — placeholders `<serial>` / `XX:XX:XX:XX:XX:XX` are used throughout.
+## Demo
 
-> 📖 **Docs site:** <https://flopsstuff.github.io/triki/> — the full write-up, built
-> with VitePress from `docs/` and published to GitHub Pages by
-> [`.github/workflows/docs.yml`](.github/workflows/docs.yml). Run it locally with
-> `npm install && npm run docs:dev`.
+<video src="https://github.com/Flopsstuff/triki/raw/main/assets/img.mp4" controls muted playsinline width="270"></video>
 
-| Front | Board |
+> If the player doesn't load, [watch the clip directly](assets/img.mp4).
+
+## 📖 **Docs site:** <https://flopsstuff.github.io/triki/>
+
+| Cap | Board |
 |---|---|
 | ![front](assets/1.jpg) | ![board](assets/2.jpg) |
 | Triki logo | Żabka "Z" logo, nRF52810 |
@@ -45,6 +45,9 @@ tools/       BLE tooling + scripts (tracked; .venv ignored)
 
 Advertising: name `TRIKI <serial>` / `Triki <serial>`, address
 `XX:XX:XX:XX:XX:XX` (random static), service `0x0001`.
+
+> Personal project on my own device. No device-identifying values (serial, BLE MAC)
+> are published — placeholders `<serial>` / `XX:XX:XX:XX:XX:XX` are used throughout.
 
 GATT (read with bleak on macOS):
 ```
