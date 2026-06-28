@@ -41,6 +41,7 @@ afterEach(() => {
   for (const c of created.splice(0)) c.disconnect();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("fusion option resolution", () => {
@@ -358,8 +359,12 @@ describe("input hardening", () => {
     const ctrl = make({ fusion: "vqf" });
     await ctrl.connect();
 
+    // Prove the new rate is actually forwarded to the live filter, not just that
+    // START was re-sent (stale coefficients would also keep the quaternion finite).
+    const retime = vi.spyOn(VqfAHRS.prototype, "setSamplePeriod");
     await ctrl.setRate(208);
     expect(ctrl.rateHz).toBe(208);
+    expect(retime).toHaveBeenCalledWith(1 / 208);
     expect(bytes(last(h.rx.writes))).toEqual(bytes(startCmd(208)));
 
     const orientations: OrientationEvent[] = [];
