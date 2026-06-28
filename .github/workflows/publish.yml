@@ -1,0 +1,99 @@
+name: Release & publish triki-controller
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the GitHub Release
+  id-token: write # required for npm OIDC trusted publishing (no NPM_TOKEN needed)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/triki-controller
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags so the changelog range works
+          persist-credentials: false # keep GITHUB_TOKEN out of git config; npm uses OIDC, gh gets GH_TOKEN via env
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+          cache-dependency-path: packages/triki-controller/package-lock.json
+
+      # Trusted publishing (OIDC) needs npm >= 11.5.1; ubuntu-latest ships older.
+      # Pin the major (11.x) so a future npm 12 can't silently change publish
+      # behaviour; the newest 11.x always satisfies the OIDC minimum.
+      - name: Upgrade npm
+        run: npm install -g npm@11
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Safety: on a tag push, ensure package.json version matches the tag.
+      - name: Verify version matches tag
+        if: github.event_name == 'push'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$PKG" != "${TAG#v}" ]; then
+            echo "::error::package.json ($PKG) != tag (${TAG#v})"
+            exit 1
+          fi
+
+      # Manual runs can target any ref; only allow publishing from main so a
+      # workflow_dispatch never ships unreleased code from a feature branch.
+      - name: Verify manual runs target main
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "main" ]; then
+            echo "::error::workflow_dispatch publishing is only allowed from main"
+            exit 1
+          fi
+
+      # prepublishOnly runs `typecheck` + `build`; provenance is auto-attached
+      # by npm under trusted publishing. A prerelease version (one with a hyphen,
+      # e.g. 0.2.0-alpha.0) goes to the `next` dist-tag so it never becomes the
+      # `latest` that `npm i triki-controller` resolves to; stable -> `latest`.
+      - name: Publish to npm
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          case "$VERSION" in
+            *-*) echo "Prerelease $VERSION -> dist-tag 'next'"; npm publish --tag next ;;
+            *)   echo "Stable $VERSION -> dist-tag 'latest'";   npm publish ;;
+          esac
+
+      # Build the changelog from commits touching the package since the previous
+      # v* tag, then cut a GitHub Release for this tag. Skipped on manual dispatch.
+      - name: Create GitHub Release with changelog
+        if: github.event_name == 'push'
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          PREV="$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null || true)"
+          RANGE="${TAG}"
+          [ -n "$PREV" ] && RANGE="${PREV}..${TAG}"
+          NOTES="$RUNNER_TEMP/notes.md"
+          {
+            echo "## What's changed"
+            echo
+            git log --no-merges --pretty='- %s (%h)' "$RANGE" -- packages/triki-controller
+            echo
+            if [ -n "$PREV" ]; then
+              echo "**Full changelog:** https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${TAG}"
+            fi
+          } > "$NOTES"
+          # Mark prerelease tags (v*-alpha.*, v*-beta.*, …) as GitHub pre-releases.
+          PRE=""
+          case "$TAG" in *-*) PRE="--prerelease" ;; esac
+          gh release create "$TAG" --title "$TAG" --notes-file "$NOTES" --verify-tag $PRE
