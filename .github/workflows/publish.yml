@@ -21,18 +21,16 @@ jobs:
           fetch-depth: 0 # full history + tags so the changelog range works
           persist-credentials: false # keep GITHUB_TOKEN out of git config; npm uses OIDC, gh gets GH_TOKEN via env
 
+      # Node 24 bundles npm >= 11.5.1, which OIDC trusted publishing requires.
+      # An ad-hoc `npm install -g npm@…` upgrade did not reliably apply to the
+      # publish step (it ran on npm 10 -> no OIDC -> anonymous -> 404), so pin
+      # the Node version instead and use its bundled npm.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           registry-url: 'https://registry.npmjs.org'
           cache: npm
           cache-dependency-path: packages/triki-controller/package-lock.json
-
-      # Trusted publishing (OIDC) needs npm >= 11.5.1; ubuntu-latest ships older.
-      # Pin the major (11.x) so a future npm 12 can't silently change publish
-      # behaviour; the newest 11.x always satisfies the OIDC minimum.
-      - name: Upgrade npm
-        run: npm install -g npm@11
 
       - name: Install dependencies
         run: npm ci
@@ -67,8 +65,8 @@ jobs:
         run: |
           VERSION="$(node -p "require('./package.json').version")"
           case "$VERSION" in
-            *-*) echo "Prerelease $VERSION -> dist-tag 'next'"; npm publish --tag next ;;
-            *)   echo "Stable $VERSION -> dist-tag 'latest'";   npm publish ;;
+            *-*) echo "Prerelease $VERSION -> dist-tag 'next'"; npm publish --tag next --provenance ;;
+            *)   echo "Stable $VERSION -> dist-tag 'latest'";   npm publish --provenance ;;
           esac
 
       # Build the changelog from commits touching the package since the previous
