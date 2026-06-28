@@ -737,10 +737,18 @@ function applyBias(b) {
   triki.setGyroBias({ ...b.gyro });
   triki.setAccelBias({ ...b.accel });
 }
-function openSettings() { writeBiasInputs(currentBias); els.settingsModal.classList.add("open"); }
+let settingsReturnFocus = null; // element to refocus when the dialog closes
+function openSettings() {
+  settingsReturnFocus = document.activeElement;
+  writeBiasInputs(currentBias);
+  els.settingsModal.classList.add("open");
+  biasInputs.accel.x.focus(); // move focus into the dialog
+}
 function closeSettings(revert) {
   if (revert) applyBias(currentBias); // discard the live preview
   els.settingsModal.classList.remove("open");
+  if (settingsReturnFocus && typeof settingsReturnFocus.focus === "function") settingsReturnFocus.focus();
+  settingsReturnFocus = null;
 }
 
 els.settings.addEventListener("click", openSettings);
