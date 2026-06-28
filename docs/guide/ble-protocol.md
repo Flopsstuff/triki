@@ -51,14 +51,14 @@ SIG, `0x02` = USB — a potential lead on the vendor/product identity.
 > identifiers — keep them out of tracked files (use placeholders `<serial>` /
 > `XX:XX:XX:XX:XX:XX`).
 
-## Control register 0x0004 — green LED
+## Control register 0x0004 (green LED)
 
 - **1-bit flag.** Writes saturate: `0x00` → reads back `0x00`; any value `>= 0x01`
   → reads back `0x01`. Effective search space = 2 states.
 - **Bit0 directly drives the green LED**: `0x01` = green on, `0x00` = off —
   immediate, no timeout (confirmed visually).
 
-## RX 0x0002 — command interface
+## RX 0x0002 (command interface)
 
 - Commands are **byte sequences** (byte0 = opcode). Some are single-byte, some are
   multi-byte (e.g. the 8-byte IMU start command — see [IMU streaming](./imu-streaming)).

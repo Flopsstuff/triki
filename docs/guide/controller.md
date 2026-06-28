@@ -1,4 +1,4 @@
-# Web Bluetooth controller — orientation visualizer
+# Web Bluetooth controller (orientation visualizer)
 
 <p><a href="../controller/" target="_blank" rel="noreferrer"><strong>▶ Open the live controller</strong></a> — runs in the browser, no install (Chromium-based browsers only).</p>
 
