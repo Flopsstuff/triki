@@ -1,0 +1,44 @@
+name: Test triki-controller
+
+# Unit tests for the publishable package. Runs only when the package (or this
+# workflow) changes, so docs-only PRs stay green without a redundant Node job.
+on:
+  pull_request:
+    paths:
+      - packages/triki-controller/**
+      - .github/workflows/test.yml
+  push:
+    branches: [main]
+    paths:
+      - packages/triki-controller/**
+      - .github/workflows/test.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/triki-controller
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 24 mirrors the publish workflow, so tests run on the same runtime
+      # that ships the package.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/triki-controller/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
