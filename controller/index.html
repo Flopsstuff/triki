@@ -95,10 +95,10 @@
     width: 120px; height: 120px; margin: -60px; border-radius: 50%;
     border: 1px solid rgba(255,255,255,.22);
   }
-  /* .disc.top = face shown when the token lies flat (accel rest equilibrium): silver, Triki "T" */
+  /* .disc.top = T face / bottle-cap side (accel Z = -1): silver, Triki "T" — the "tails" view */
   .disc.top    { background: radial-gradient(circle at 38% 32%, #d9dee4, #aab2bc 68%, #899099);
                  transform: rotateX( 90deg) translateZ(11px); }
-  /* .disc.bottom = opposite face: green, Żabka "Ż" */
+  /* .disc.bottom = Ż face / Żabka side (accel Z = +1): green, Żabka "Ż" — the "heads" view */
   .disc.bottom { background: radial-gradient(circle at 38% 32%, #5fce97, #3fae79 68%, #2f8e69);
                  transform: rotateX(-90deg) translateZ(11px); }
 
@@ -162,15 +162,15 @@
 </div>
 
 <header>
-  <button id="connect" class="primary">Connect</button>
-  <button id="disconnect" disabled>Disconnect</button>
+  <button id="conn" class="primary">Connect</button>
   <button id="led" disabled>LED</button>
-  <button id="reset" disabled>Reset heading</button>
-  <button id="pose">View: lying</button>
+  <button id="rate">1x</button>
+  <button id="pose">Heads</button>
+  <button id="reset" disabled>Reset</button>
   <span class="spacer"></span>
-  <span id="status" class="pill idle"><span class="dot"></span><span id="statusText">idle</span></span>
-  <span id="hz" class="pill idle"><span class="dot"></span><span id="hzText">— Hz</span></span>
+  <span id="status" class="pill idle"><span class="dot"></span><span id="statusText">disconnected</span></span>
   <span id="batt" class="pill idle"><span class="dot"></span><span id="battText">Batt: —</span></span>
+  <span id="sig" class="pill idle"><span class="dot"></span><span id="sigText">—</span></span>
 </header>
 
 <div class="grid">
@@ -212,8 +212,11 @@
 <p class="hint">
   Lay the token flat → the Z accel axis should read ≈ <b>+1.00 g</b>. Yaw drifts over
   time (6-axis fusion, no magnetometer) — use <b>Reset heading</b> to re-zero it.
-  <b>View: lying</b> looks top-down (token flat on the table); <b>standing</b> tilts the
-  camera so a vertically-held token renders face-on (1:1 with the screen).
+  The view button steps the camera 90° about X each press —
+  <b>Heads</b> (Ż / green Żabka logo, top-down) → <b>Edge</b> → <b>Tails</b> (T / bottle-cap face) → <b>Edge</b> → …
+  An <b>Edge</b> view renders a vertically-held token face-on (1:1 with the screen).
+  The rate button steps the IMU sample rate <b>0.25x</b> (26 Hz) → <b>4x</b> (416 Hz);
+  1x = 104 Hz. Above ~208 Hz BLE may not keep up — watch the actual <i>streaming NNN Hz</i>.
   Only one BLE central can hold the token at a time: close any running bleak script first.
 </p>
 
@@ -230,7 +233,23 @@ const CTRL = "6e400004-b5a3-f393-e0a9-e50e24dcca9e"; // 1-bit green LED
 const BATT_SVC  = "battery_service"; // 0x180F  standard BLE Battery Service
 const BATT_CHAR = "battery_level";   // 0x2A19  uint8 percent (0–100)
 
-const START       = Uint8Array.of(0x20, 0x10, 0x00, 0xD0, 0x07, 0x68, 0x00, 0x03);
+// IMU start command. Bytes 5-6 (LE uint16) are the sample rate / ODR in Hz: 0x0068 = 104.
+// 26 / 52 / 104 / 208 / 416 map to adjacent LSM6DSL ODR steps and are exposed as 0.25x … 4x.
+// (12.5 Hz / 0.12x was dropped — the firmware doesn't accept it.)
+const START_BASE = [0x20, 0x10, 0x00, 0xD0, 0x07, 0x68, 0x00, 0x03];
+const RATES = [
+  { label: "0.25x", hz: 26  },
+  { label: "0.5x",  hz: 52  },
+  { label: "1x",    hz: 104 },
+  { label: "2x",    hz: 208 },
+  { label: "4x",    hz: 416 },
+];
+let rateIdx = 2; // default 1x
+function startCmd(hz) {
+  const c = Uint8Array.from(START_BASE);
+  c[5] = hz & 0xff; c[6] = (hz >> 8) & 0xff;
+  return c;
+}
 const ACCEL_SCALE = 2048.0;  // LSB per g (verified: flat token reads +2048 = 1 g)
 
 // Gyro sensitivity (LSB per °/s). The old 131.0 was an MPU-6050 ±250 dps value
@@ -253,10 +272,9 @@ const GYRO_RANGE  = 500.0;   // ±500 °/s (bars clamp beyond)
 // ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const els = {
-  connect: $("connect"), disconnect: $("disconnect"), led: $("led"), reset: $("reset"), pose: $("pose"),
+  conn: $("conn"), led: $("led"), reset: $("reset"), pose: $("pose"), rate: $("rate"),
   status: $("status"), statusText: $("statusText"),
-  hz: $("hz"), hzText: $("hzText"),
-  batt: $("batt"), battText: $("battText"),
+  batt: $("batt"), battText: $("battText"), sig: $("sig"), sigText: $("sigText"),
   model: $("model"), cap: $("cap"), roll: $("roll"), pitch: $("pitch"), yaw: $("yaw"),
   log: $("log"),
 };
@@ -307,9 +325,27 @@ function setBar(fill, value, range) {
   else { fill.style.left = "auto"; fill.style.right = "50%"; }
 }
 
-function setStatus(cls, text) {
-  els.status.className = "pill " + cls;
-  els.statusText.textContent = text;
+// One status widget + one toggle button, driven by three states. While streaming,
+// render() appends the live Hz to the status text.
+let connState = "disconnected"; // 'disconnected' | 'pairing' | 'streaming'
+function setState(s) {
+  connState = s;
+  if (s === "pairing") {
+    els.status.className = "pill busy";
+    els.statusText.textContent = "pairing";
+    els.conn.textContent = "Connect";
+    els.conn.disabled = true;                 // no clicks mid-handshake
+  } else if (s === "streaming") {
+    els.status.className = "pill live";
+    els.statusText.textContent = "streaming";
+    els.conn.textContent = "Disconnect";
+    els.conn.disabled = false;
+  } else { // disconnected
+    els.status.className = "pill idle";
+    els.statusText.textContent = "disconnected";
+    els.conn.textContent = "Connect";
+    els.conn.disabled = !navigator.bluetooth;
+  }
 }
 
 function log(line) {
@@ -407,9 +443,17 @@ function eulerOf([w, x, y, z]) {
 
 // Display reference, applied on top of the raw fusion quaternion every frame:
 //   qDisplay = yawOffset ∘ q     (heading re-zero, set by "Reset heading")
-// then the CSS view tilt for the lying/standing camera angle.
+// then a fixed CSS camera preset cycled by the view button.
 let yawOffsetQ = [1, 0, 0, 0];
-let standing = false;
+// Camera presets cycled on each button press — a 90° step about X each time:
+//   heads (Ż / green Żabka face, accel Z=+1, top-down) → edge → tails (T / bottle-cap face, Z=-1) → edge …
+const VIEWS = [
+  { name: "Heads", css: "" },                  // Ż / Żabka face up (Z=+1), token flat, top-down (default)
+  { name: "Edge",  css: "rotateX(90deg) " },   // on the rim — vertical token renders face-on
+  { name: "Tails", css: "rotateX(180deg) " },  // T / bottle-cap face (Z=-1)
+  { name: "Edge",  css: "rotateX(270deg) " },  // on the rim, other side
+];
+let viewIdx = 0;
 
 // ---------------------------------------------------------------------------
 // Frame parser — port of ble_imu_stream.py on_tx()
@@ -488,6 +532,25 @@ function countFrame() {
 }
 function currentHz() { return frameTimes.length; }
 
+// Signal indicator: prefer a real RSSI (dBm) from advertisements; otherwise fall back to
+// a link-quality % from the IMU packet rate (it drops as the link degrades / range grows).
+// Web Bluetooth exposes no RSSI for a *connected* device, so dBm only shows if the token
+// still advertises while connected — usually it doesn't, hence the throughput fallback.
+let lastRssi = null, lastRssiTs = 0;
+function updateSignal(hz) {
+  if (lastRssi !== null && performance.now() - lastRssiTs < 4000) {
+    els.sigText.textContent = lastRssi + " dBm";
+    els.sig.className = "pill " + (lastRssi >= -60 ? "live" : lastRssi >= -75 ? "busy" : "err");
+  } else if (hz > 0) {
+    const pct = Math.min(100, Math.round(hz / RATES[rateIdx].hz * 100));
+    els.sigText.textContent = "link " + pct + "%";
+    els.sig.className = "pill " + (pct >= 85 ? "live" : pct >= 60 ? "busy" : "err");
+  } else {
+    els.sigText.textContent = "—";
+    els.sig.className = "pill idle";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Render loop — DOM only; fusion already ran per-frame in decodeFrame()
 // ---------------------------------------------------------------------------
@@ -514,9 +577,8 @@ function render() {
     // conjugation by 180° about X) flips exactly those two and leaves X untouched —
     // done only for display, the fusion quaternion stays consistent.
     const qShow = [qd[0], qd[1], -qd[2], -qd[3]];
-    // "standing" tilts the camera 90° so a vertically-held token renders face-on (1:1
-    // with the monitor); "lying" looks straight down the gravity axis (top-down).
-    const view = standing ? "rotateX(90deg) " : "";
+    // camera preset (heads/tails = the two faces, edge = on the rim); cycled by the button
+    const view = VIEWS[viewIdx].css;
     els.model.style.transform = view + quatToMatrix3d(qShow);
 
     const e = eulerOf(qShow);
@@ -526,8 +588,9 @@ function render() {
   }
 
   const hz = currentHz();
-  els.hzText.textContent = (hz ? hz : "—") + " Hz";
-  els.hz.className = "pill " + (hz ? "live" : "idle");
+  if (connState === "streaming") els.statusText.textContent = "streaming " + (hz ? hz : "—") + " Hz";
+
+  updateSignal(hz);
 
   requestAnimationFrame(render);
 }
@@ -541,19 +604,18 @@ let ledOn = false;
 
 if (!navigator.bluetooth) {
   $("unsupported").style.display = "block";
-  els.connect.disabled = true;
 }
+setState("disconnected");
 
 async function connect() {
   try {
-    setStatus("busy", "requesting device…");
+    setState("pairing");
     device = await navigator.bluetooth.requestDevice({
       filters: [{ namePrefix: "TRIKI" }, { namePrefix: "Triki" }],
       optionalServices: [NUS, BATT_SVC],
     });
     device.addEventListener("gattserverdisconnected", onDisconnected);
 
-    setStatus("busy", "connecting…");
     gatt = await device.gatt.connect();
     const svc = await gatt.getPrimaryService(NUS);
     rxChar = await svc.getCharacteristic(RX);
@@ -563,18 +625,17 @@ async function connect() {
     await txChar.startNotifications();
     txChar.addEventListener("characteristicvaluechanged", onNotify);
 
-    await rxChar.writeValueWithoutResponse(START);
-    log("→ START " + hex(START));
+    const cmd = startCmd(RATES[rateIdx].hz);
+    await rxChar.writeValueWithoutResponse(cmd);
+    log("→ START " + hex(cmd) + " (" + RATES[rateIdx].hz + " Hz)");
 
     readBattery(); // standard Battery Service — best-effort, never blocks the stream
+    watchSignal(); // best-effort live RSSI from advertisements (often silent once connected)
 
-    setStatus("live", "streaming");
-    els.connect.disabled = true;
-    els.disconnect.disabled = false;
+    setState("streaming");
     els.reset.disabled = false;
     els.led.disabled = !ctrlChar;
   } catch (e) {
-    setStatus("err", "error");
     log("⚠ " + e.message);
     cleanup();
   }
@@ -604,6 +665,23 @@ async function readBattery() {
   }
 }
 
+// Best-effort live RSSI: fires only if the device advertises while connected (usually it
+// doesn't — one connection at a time). Guarded so it never disturbs the IMU stream.
+function onAdv(ev) {
+  if (typeof ev.rssi === "number") { lastRssi = ev.rssi; lastRssiTs = performance.now(); }
+}
+async function watchSignal() {
+  if (!device || typeof device.watchAdvertisements !== "function") return;
+  try {
+    device.addEventListener("advertisementreceived", onAdv);
+    await device.watchAdvertisements();
+    log("• watching advertisements for RSSI");
+  } catch (e) {
+    device.removeEventListener("advertisementreceived", onAdv);
+    log("• RSSI unavailable: " + e.message);
+  }
+}
+
 function onNotify(ev) {
   const v = ev.target.value; // DataView
   const bytes = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
@@ -613,7 +691,6 @@ function onNotify(ev) {
 }
 
 function onDisconnected() {
-  setStatus("idle", "disconnected");
   log("• disconnected");
   cleanup();
 }
@@ -630,13 +707,17 @@ function cleanup() {
   latest = null;
   frameTimes = [];
   lastFrameTs = 0;
-  els.connect.disabled = !navigator.bluetooth;
-  els.disconnect.disabled = true;
+  setState("disconnected");
   els.led.disabled = true;
   els.reset.disabled = true;
   els.led.classList.remove("on");
   els.battText.textContent = "Batt: —";
   els.batt.className = "pill idle";
+  try { if (device && device.watchingAdvertisements) device.unwatchAdvertisements(); } catch {}
+  if (device) device.removeEventListener("advertisementreceived", onAdv);
+  lastRssi = null; lastRssiTs = 0;
+  els.sigText.textContent = "—";
+  els.sig.className = "pill idle";
 }
 
 async function toggleLed() {
@@ -656,8 +737,7 @@ function hex(arr) {
   return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join(" ");
 }
 
-els.connect.addEventListener("click", connect);
-els.disconnect.addEventListener("click", disconnect);
+els.conn.addEventListener("click", () => { connState === "disconnected" ? connect() : disconnect(); });
 els.led.addEventListener("click", toggleLed);
 // Reset heading: zero only the yaw (heading) — the one DOF that drifts. Tilt stays
 // absolute (the accelerometer keeps it levelled), so there is no swing.
@@ -666,10 +746,20 @@ els.reset.addEventListener("click", () => {
   log("• heading reset");
 });
 els.pose.addEventListener("click", () => {
-  standing = !standing;
-  els.pose.textContent = "View: " + (standing ? "standing" : "lying");
-  els.pose.classList.toggle("on", standing);
-  log("• view: " + (standing ? "standing" : "lying"));
+  viewIdx = (viewIdx + 1) % VIEWS.length;
+  els.pose.textContent = VIEWS[viewIdx].name;
+  log("• view: " + VIEWS[viewIdx].name);
+});
+// Sample-rate cycle (0.5x/1x/2x = 52/104/208 Hz). Re-sends START live if streaming;
+// otherwise it just applies on the next connect.
+els.rate.addEventListener("click", async () => {
+  rateIdx = (rateIdx + 1) % RATES.length;
+  els.rate.textContent = RATES[rateIdx].label;
+  log("• rate: " + RATES[rateIdx].label + " → " + RATES[rateIdx].hz + " Hz");
+  if (rxChar) {
+    try { await rxChar.writeValueWithoutResponse(startCmd(RATES[rateIdx].hz)); }
+    catch (e) { log("⚠ rate: " + e.message); }
+  }
 });
 </script>
 </body>
