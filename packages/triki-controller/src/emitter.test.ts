@@ -65,15 +65,18 @@ describe("TypedEmitter", () => {
   test("a throwing listener is isolated and does not stop the others", () => {
     const bus = new Bus();
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const after = vi.fn();
-    bus.on("ping", () => {
-      throw new Error("boom");
-    });
-    bus.on("ping", after);
-    expect(() => bus.fire("ping", 1)).not.toThrow();
-    expect(after).toHaveBeenCalledWith(1);
-    expect(errSpy).toHaveBeenCalled();
-    errSpy.mockRestore();
+    try {
+      const after = vi.fn();
+      bus.on("ping", () => {
+        throw new Error("boom");
+      });
+      bus.on("ping", after);
+      expect(() => bus.fire("ping", 1)).not.toThrow();
+      expect(after).toHaveBeenCalledWith(1);
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   test("removeAllListeners() clears every subscription", () => {
