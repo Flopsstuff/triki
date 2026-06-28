@@ -184,6 +184,8 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
    */
   async setRate(hz: number): Promise<void> {
     this.#rateHz = hz;
+    // Keep VQF's accel low-pass aligned with the new sample period.
+    if (this.#filter instanceof VqfAHRS) this.#filter.setSamplePeriod(1 / hz);
     if (this.#rxChar) await this.#write(this.#rxChar, startCmd(hz), true);
   }
 

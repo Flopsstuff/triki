@@ -80,6 +80,20 @@ export class VqfAHRS implements OrientationFilter {
     }
   }
 
+  /**
+   * Set the sample period (seconds) and recompute the Butterworth coefficients,
+   * without disturbing the orientation state. Call this when the IMU rate changes so
+   * `tauAcc` and bootstrap timing stay aligned with the new period. Non-finite or
+   * non-positive values are ignored.
+   */
+  setSamplePeriod(ts: number): void {
+    if (!Number.isFinite(ts) || ts <= 0) return;
+    this.#ts = ts;
+    const c = filterCoeffs(this.#tauAcc, ts);
+    this.#b = c.b;
+    this.#a = c.a;
+  }
+
   /** Reset orientation to identity `[1, 0, 0, 0]` and re-bootstrap the accel filter. */
   reset(): void {
     this.#gyrQuat = [1, 0, 0, 0];
