@@ -12,7 +12,9 @@ motion sensors over BLE and reuse it as a **motion controller**.
 
 ## Demo
 
-https://github.com/user-attachments/assets/61ef9f09-5221-43e0-a817-9f42f8408c86
+
+https://github.com/user-attachments/assets/28ce676f-df75-45fe-97c4-c4d471e001a1
+
 
 > If the player doesn't load, [watch the clip directly](assets/video.mp4).
 
