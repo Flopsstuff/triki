@@ -17,7 +17,9 @@ hero:
       link: /guide/overview
     - theme: alt
       text: Demo
-      link: /controller
+      link: /controller/
+      target: _blank
+      rel: noreferrer
     - theme: alt
       text: View on GitHub
       link: https://github.com/Flopsstuff/triki
