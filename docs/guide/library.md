@@ -243,6 +243,7 @@ import type { TrikiTransport, TrikiTransportHandlers } from "triki-controller";
 
 class ReplayTransport implements TrikiTransport {
   #handlers: TrikiTransportHandlers | null = null;
+  #connected = false; // connection state — separate from attach/detach ownership
   readonly hasLed = false;
 
   attach(handlers: TrikiTransportHandlers): void {
@@ -250,12 +251,18 @@ class ReplayTransport implements TrikiTransport {
     this.#handlers = handlers;
   }
   detach(): void { this.#handlers = null; }
-  async connect(): Promise<void> { /* open your source */ }
+  async connect(): Promise<void> { this.#connected = true; /* open your source */ }
   async writeRx(): Promise<void> { /* swallow START — it's a replay */ }
   async writeCtrl(): Promise<void> { throw new Error("No LED on a replay."); }
-  disconnect(): void { this.#handlers?.onDisconnect(); /* if connected */ }
+  disconnect(): void {
+    if (!this.#connected) return; // idempotent; never fires onDisconnect unconnected
+    this.#connected = false;
+    this.#handlers?.onDisconnect();
+  }
 
-  feed(bytes: Uint8Array): void { this.#handlers?.onFrame(bytes); }
+  feed(bytes: Uint8Array): void {
+    if (this.#connected) this.#handlers?.onFrame(bytes); // frames only while active
+  }
 }
 ```
 
