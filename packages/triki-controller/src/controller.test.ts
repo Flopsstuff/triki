@@ -211,6 +211,17 @@ describe("battery", () => {
     expect(ctrl.battery).toBe(42);
   });
 
+  test("ignores an empty battery payload instead of throwing", async () => {
+    const h = install({ batteryLevel: 87 });
+    const ctrl = make({ fusion: "none" });
+    await ctrl.connect();
+    await flush(); // battery read + subscription settle
+
+    // A 0-byte ATT value is protocol-legal; getUint8(0) on it would RangeError.
+    h.battery!.notify(new Uint8Array(0));
+    expect(ctrl.battery).toBe(87); // the initial read stands, the empty update is dropped
+  });
+
   test("tolerates a token without the Battery service", async () => {
     install({ battery: false });
     const ctrl = make({ fusion: "none" });
@@ -289,6 +300,28 @@ describe("lifecycle", () => {
     expect(ctrl.isConnected).toBe(true);
 
     h.gatt.disconnect(); // simulate the peripheral dropping the link
+    expect(ctrl.state).toBe("disconnected");
+  });
+
+  test("connect() without Web Bluetooth rejects with zero connectionchange events", async () => {
+    vi.stubGlobal("navigator", {}); // no navigator.bluetooth
+    const ctrl = make({ fusion: "none" });
+    const states: ConnectionState[] = [];
+    ctrl.on("connectionchange", (s) => states.push(s));
+
+    await expect(ctrl.connect()).rejects.toThrow("Web Bluetooth is not available");
+    expect(states).toEqual([]); // preflight fails before any state change
+    expect(ctrl.state).toBe("disconnected");
+  });
+
+  test("reconnect() before any connect() rejects with zero connectionchange events", async () => {
+    install();
+    const ctrl = make({ fusion: "none" });
+    const states: ConnectionState[] = [];
+    ctrl.on("connectionchange", (s) => states.push(s));
+
+    await expect(ctrl.reconnect()).rejects.toThrow("No device to reconnect to");
+    expect(states).toEqual([]);
     expect(ctrl.state).toBe("disconnected");
   });
 });

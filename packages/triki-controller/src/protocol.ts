@@ -14,10 +14,13 @@ export const NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 /** Control register — 1 byte, drives the green LED (0x01 on / 0x00 off). */
 export const NUS_CTRL = "6e400004-b5a3-f393-e0a9-e50e24dcca9e";
 
-/** Standard Battery Service (0x180F). */
-export const BATTERY_SERVICE = "battery_service";
+/** Standard Battery Service (0x180F), as a canonical 128-bit UUID. */
+export const BATTERY_SERVICE = "0000180f-0000-1000-8000-00805f9b34fb";
 /** Standard Battery Level characteristic (0x2A19) — uint8 percent. */
-export const BATTERY_LEVEL = "battery_level";
+export const BATTERY_LEVEL = "00002a19-0000-1000-8000-00805f9b34fb";
+
+/** Advertised device-name prefix ("TRIKI <serial>"; some firmware advertises "Triki"). */
+export const DEVICE_NAME_PREFIX = "TRIKI";
 
 /**
  * Base bytes of the 8-byte IMU start command. Bytes 5-6 carry the sample rate

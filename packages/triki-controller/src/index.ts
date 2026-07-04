@@ -1,6 +1,7 @@
 /** Public API for triki-controller. */
 
 export { TrikiController } from "./controller";
+export { WebBluetoothTransport } from "./transports/web-bluetooth";
 export { MadgwickAHRS, AccelAHRS, quatMul, quatAboutZ, yawRadOf, eulerOf } from "./fusion";
 export { VqfAHRS, DEFAULT_TAU_ACC } from "./vqf";
 export { FrameParser, decodeCounts } from "./parser";
@@ -13,6 +14,7 @@ export {
   NUS_CTRL,
   BATTERY_SERVICE,
   BATTERY_LEVEL,
+  DEVICE_NAME_PREFIX,
   HEADER0,
   HEADER1,
   FRAME_LEN,
@@ -24,6 +26,8 @@ export {
   SUPPORTED_RATES_HZ,
 } from "./protocol";
 
+export { ScanTimeoutError, ConnectAbortedError } from "./transport";
+export type { TrikiTransport, TrikiTransportHandlers } from "./transport";
 export type { Quaternion, EulerAngles, MadgwickOptions, OrientationFilter } from "./fusion";
 export type { VqfOptions } from "./vqf";
 export type { RawFrame } from "./parser";

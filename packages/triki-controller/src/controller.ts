@@ -1,8 +1,10 @@
 /**
- * Web Bluetooth client for the Żabka Triki BLE token. Connects over the Nordic
- * UART Service, starts the IMU stream, parses motion frames, and (optionally) fuses
- * orientation with a 6-axis Madgwick filter. This is the only module that touches
- * `navigator.bluetooth` and `performance`.
+ * Client for the Żabka Triki BLE token. Owns the IMU protocol (START/LED commands),
+ * parses motion frames, and (optionally) fuses orientation with a selectable 6-axis
+ * filter (Madgwick / VQF / accel-only). The actual BLE link is delegated to a
+ * {@link TrikiTransport} — by default a `WebBluetoothTransport` (browser), or a
+ * `NobleTransport` (Node) — so this module is transport-agnostic and never touches
+ * `navigator.bluetooth` directly.
  */
 import { TypedEmitter } from "./emitter";
 import { FrameParser } from "./parser";
@@ -11,12 +13,6 @@ import { MadgwickAHRS, AccelAHRS, quatMul, quatAboutZ, yawRadOf, eulerOf } from 
 import type { OrientationFilter, Quaternion } from "./fusion";
 import { VqfAHRS, DEFAULT_TAU_ACC } from "./vqf";
 import {
-  NUS_SERVICE,
-  NUS_RX,
-  NUS_TX,
-  NUS_CTRL,
-  BATTERY_SERVICE,
-  BATTERY_LEVEL,
   DEFAULT_ACCEL_SCALE,
   DEFAULT_GYRO_SCALE,
   DEFAULT_RATE_HZ,
@@ -24,6 +20,9 @@ import {
   startCmd,
   ledCmd,
 } from "./protocol";
+import { WebBluetoothTransport } from "./transports/web-bluetooth";
+import { ConnectAbortedError } from "./transport";
+import type { TrikiTransport } from "./transport";
 import type {
   ConnectionState,
   FusionAlgorithm,
@@ -55,16 +54,37 @@ function resolveFusion(opt: boolean | FusionAlgorithm | undefined): FusionAlgori
   return opt;
 }
 
+/**
+ * Validate a custom transport's shape up front: one TypeError naming every missing
+ * member beats a property-access crash deep inside connect() (plain-JS transports
+ * get no compiler help).
+ */
+function assertTransport(t: TrikiTransport): void {
+  if (t === null || (typeof t !== "object" && typeof t !== "function")) {
+    throw new TypeError(`Invalid TrikiTransport: expected an object, got ${typeof t}.`);
+  }
+  const isFn = (name: string): boolean =>
+    typeof (t as unknown as Record<string, unknown>)[name] === "function";
+  const problems: string[] = [];
+  for (const name of ["attach", "detach", "connect", "writeRx", "writeCtrl", "disconnect"]) {
+    if (!isFn(name)) problems.push(name);
+  }
+  if (!("hasLed" in t)) problems.push("hasLed");
+  for (const name of ["reconnect", "preflight"] as const) {
+    if (t[name] !== undefined && typeof t[name] !== "function") problems.push(name);
+  }
+  if (problems.length) {
+    throw new TypeError(
+      `Invalid TrikiTransport: missing or non-function member(s): ${problems.join(", ")}.`,
+    );
+  }
+}
+
 const RATE_WINDOW_MS = 1000;
 const MAX_DT_S = 0.2;
 
 export class TrikiController extends TypedEmitter<TrikiEventMap> {
-  #device: BluetoothDevice | null = null;
-  #gatt: BluetoothRemoteGATTServer | null = null;
-  #rxChar: BluetoothRemoteGATTCharacteristic | null = null;
-  #txChar: BluetoothRemoteGATTCharacteristic | null = null;
-  #ctrlChar: BluetoothRemoteGATTCharacteristic | null = null;
-  #batteryChar: BluetoothRemoteGATTCharacteristic | null = null;
+  #transport: TrikiTransport;
   #battery: number | null = null;
 
   #parser = new FrameParser();
@@ -73,6 +93,8 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
   #beta: number;
   #tauAcc: number;
   #state: ConnectionState = "disconnected";
+  /** Bumped by every #open; failure paths compare it to ignore superseded attempts. */
+  #epoch = 0;
   #rateHz: number;
   #gyroScale: number;
   #gyroBias: Vec3;
@@ -92,6 +114,13 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
     this.#beta = options.beta ?? DEFAULT_BETA;
     this.#tauAcc = options.tauAcc ?? DEFAULT_TAU_ACC;
     this.#filter = this.#makeFilter(this.#algo);
+    this.#transport = options.transport ?? new WebBluetoothTransport();
+    assertTransport(this.#transport);
+    this.#transport.attach({
+      onFrame: this.#ingest,
+      onDisconnect: this.#handleTransportDisconnect,
+      onBattery: this.#handleBattery,
+    });
   }
 
   #makeFilter(algo: FusionAlgorithm): OrientationFilter | null {
@@ -101,9 +130,9 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
     return null;
   }
 
-  /** True when Web Bluetooth is available (safe to call during SSR). */
+  /** True when the default Web Bluetooth transport is available (safe during SSR). */
   static isSupported(): boolean {
-    return typeof navigator !== "undefined" && !!navigator.bluetooth;
+    return WebBluetoothTransport.isSupported();
   }
 
   /** True while streaming. */
@@ -123,7 +152,7 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
 
   /** True when the token exposes the LED control characteristic. */
   get hasLed(): boolean {
-    return this.#ctrlChar !== null;
+    return this.#transport.hasLed;
   }
 
   /** Last known battery level in percent, or `null` if not read yet. */
@@ -142,54 +171,62 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
   }
 
   /**
-   * Show the browser device picker, connect, and start the IMU stream.
-   * Must be called from a user gesture (e.g. a click handler). Rejects (after
-   * cleaning up) if pairing or the handshake fails.
+   * Connect through the transport and start the IMU stream. With the default Web
+   * Bluetooth transport this shows the device picker and must be called from a user
+   * gesture (e.g. a click handler). Precondition failures (e.g. no Web Bluetooth)
+   * reject with zero `connectionchange` events; after a real attempt starts, failure
+   * cleans up (transport included) and rejects after a `disconnected` event.
    */
   async connect(): Promise<void> {
-    if (!TrikiController.isSupported()) {
-      throw new Error("Web Bluetooth is not available in this environment.");
-    }
-    if (this.#state !== "disconnected") return;
-    try {
-      this.#setState("pairing");
-      this.#device = await navigator.bluetooth.requestDevice({
-        filters: [{ namePrefix: "TRIKI" }, { namePrefix: "Triki" }],
-        optionalServices: [NUS_SERVICE, BATTERY_SERVICE],
-      });
-      await this.#startSession();
-    } catch (err) {
-      this.#cleanup();
-      throw err;
-    }
+    return this.#open("connect", () => this.#transport.connect());
   }
 
   /**
-   * Reconnect to the previously paired device without showing the picker.
-   * Throws if {@link connect} was never called.
+   * Reconnect to the previously selected device without re-prompting. Rejects with
+   * zero events if the transport does not support reconnecting or has no device to
+   * reconnect to (e.g. {@link connect} was never called).
    */
   async reconnect(): Promise<void> {
-    if (!this.#device) throw new Error("No device to reconnect to; call connect() first.");
-    if (this.#state !== "disconnected") return;
-    try {
-      this.#setState("pairing");
-      await this.#startSession();
-    } catch (err) {
-      this.#cleanup();
-      throw err;
+    if (typeof this.#transport.reconnect !== "function") {
+      throw new Error("This transport does not support reconnect().");
     }
+    return this.#open("reconnect", () => this.#transport.reconnect!());
   }
 
-  /** Disconnect from the token. Triggers a `connectionchange` to `disconnected`. */
+  /**
+   * Disconnect from the token. Idempotent and safe in any state — including a pending
+   * {@link connect} (which then rejects). Triggers a `connectionchange` to
+   * `disconnected` when leaving `pairing`/`streaming`.
+   */
   disconnect(): void {
-    if (this.#gatt && this.#gatt.connected) this.#gatt.disconnect();
-    else this.#onDisconnected();
+    const epoch = this.#epoch;
+    try {
+      this.#transport.disconnect();
+    } catch {
+      /* still reset local state below */
+    }
+    // The transport's onDisconnect normally drives this; the fallback keeps the
+    // controller recoverable even against a buggy transport. The epoch guard skips it
+    // when a listener already started a NEW attempt during the synchronous
+    // onDisconnect cascade — its 'pairing' state is not ours to reset.
+    if (this.#epoch === epoch && this.#state !== "disconnected") this.#cleanup();
+  }
+
+  /**
+   * Release this controller: disconnect, detach from the transport (so another
+   * controller may attach), and drop all event listeners. The controller must not be
+   * used afterwards.
+   */
+  dispose(): void {
+    this.disconnect();
+    this.#transport.detach();
+    this.removeAllListeners();
   }
 
   /** Turn the green LED on or off. Throws when the LED characteristic is unavailable. */
   async setLed(on: boolean): Promise<void> {
-    if (!this.#ctrlChar) throw new Error("LED control characteristic is not available.");
-    await this.#ctrlChar.writeValue(ledCmd(on));
+    if (!this.#transport.hasLed) throw new Error("LED control characteristic is not available.");
+    await this.#transport.writeCtrl(ledCmd(on));
   }
 
   /**
@@ -200,7 +237,7 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
     this.#rateHz = hz;
     // Keep VQF's accel low-pass aligned with the new sample period.
     if (this.#filter instanceof VqfAHRS) this.#filter.setSamplePeriod(1 / hz);
-    if (this.#rxChar) await this.#write(this.#rxChar, startCmd(hz), true);
+    if (this.#state === "streaming") await this.#transport.writeRx(startCmd(hz), true);
   }
 
   /** Re-zero the heading (yaw). No-op when fusion is disabled. Tilt stays absolute. */
@@ -252,85 +289,67 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
 
   // --- internal ----------------------------------------------------------------
 
-  async #startSession(): Promise<void> {
-    const device = this.#device;
-    if (!device || !device.gatt) throw new Error("Device GATT is not available.");
-    // Same listener reference, so re-adding on reconnect is a no-op.
-    device.addEventListener("gattserverdisconnected", this.#onDisconnected);
-
-    this.#gatt = await device.gatt.connect();
-    const svc = await this.#gatt.getPrimaryService(NUS_SERVICE);
-    this.#rxChar = await svc.getCharacteristic(NUS_RX);
-    this.#txChar = await svc.getCharacteristic(NUS_TX);
-    try {
-      this.#ctrlChar = await svc.getCharacteristic(NUS_CTRL);
-    } catch {
-      this.#ctrlChar = null;
-    }
-
-    await this.#txChar.startNotifications();
-    this.#txChar.addEventListener("characteristicvaluechanged", this.#onNotify);
-
-    await this.#write(this.#rxChar, startCmd(this.#rateHz), true);
-
-    this.#startRateTimer();
-    void this.#startBattery(this.#gatt); // async, best-effort; never blocks streaming
-    this.#setState("streaming");
-  }
-
   /**
-   * Read the battery level once and subscribe to updates, if the service exists.
-   * Fire-and-forget: `gatt` pins the session, and we bail after each await once it is
-   * no longer the active connection so a stale read/listener can't outlive cleanup.
+   * Shared connect/reconnect flow: sync pre-flight (zero events on failure), then
+   * `pairing` → establish → START → `streaming`; any failure (including a
+   * {@link disconnect} racing the awaits) closes the transport, cleans up locally,
+   * and rethrows. The epoch token makes the failure path attempt-aware: a superseded
+   * attempt's late rejection must neither touch the transport nor reset the state a
+   * NEWER attempt owns.
    */
-  async #startBattery(gatt: BluetoothRemoteGATTServer | null): Promise<void> {
-    if (!gatt) return;
+  async #open(op: "connect" | "reconnect", establish: () => Promise<void>): Promise<void> {
+    if (this.#state !== "disconnected") return;
+    this.#transport.preflight?.(op); // throw → rejection with zero connectionchange events
+    const epoch = ++this.#epoch;
+    this.#setState("pairing");
     try {
-      const svc = await gatt.getPrimaryService(BATTERY_SERVICE);
-      if (this.#gatt !== gatt) return;
-      const char = await svc.getCharacteristic(BATTERY_LEVEL);
-      if (this.#gatt !== gatt) return;
-      const value = await char.readValue();
-      if (this.#gatt !== gatt) return;
-      this.#emitBattery(value);
-      this.#batteryChar = char;
-      try {
-        await char.startNotifications();
-        if (this.#gatt !== gatt) {
-          this.#batteryChar = null; // disconnected mid-subscribe; don't leak a listener
-          return;
+      await establish();
+      this.#assertCurrent(epoch);
+      await this.#transport.writeRx(startCmd(this.#rateHz), true);
+      this.#assertCurrent(epoch);
+      this.#startRateTimer();
+      this.#setState("streaming");
+    } catch (err) {
+      if (this.#epoch === epoch) {
+        // Close the transport BEFORE emitting 'disconnected', so a retry started
+        // synchronously from a connectionchange listener runs against a fully
+        // torn-down transport instead of being cancelled by us a moment later.
+        try {
+          this.#transport.disconnect();
+        } catch {
+          /* best-effort */
         }
-        char.addEventListener("characteristicvaluechanged", this.#onBattery);
-      } catch {
-        this.#batteryChar = null; // notifications unsupported; the one-time read stands
+        // A listener may have started a new attempt during the emit above.
+        if (this.#epoch === epoch && this.#state !== "disconnected") this.#cleanup();
       }
-    } catch {
-      this.#batteryChar = null; // no Battery service on this token
+      throw err;
     }
   }
 
-  #onBattery = (event: Event): void => {
-    const char = event.target as BluetoothRemoteGATTCharacteristic;
-    if (char.value) this.#emitBattery(char.value);
-  };
-
-  #emitBattery(view: DataView): void {
-    const pct = view.getUint8(0);
-    this.#battery = pct;
-    this.emit("battery", pct);
+  /** A disconnect (or a newer attempt) intervened while connecting. */
+  #assertCurrent(epoch: number): void {
+    if (this.#epoch !== epoch || this.#state !== "pairing") {
+      throw new ConnectAbortedError("Connection cancelled while connecting.");
+    }
   }
 
-  #onNotify = (event: Event): void => {
-    const char = event.target as BluetoothRemoteGATTCharacteristic;
-    const view = char.value;
-    if (!view) return;
-    // byteOffset/byteLength are load-bearing: the underlying buffer may be larger.
-    const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+  /** Transport callback: decode inbound notification bytes into frames. */
+  #ingest = (bytes: Uint8Array): void => {
+    if (this.#state !== "streaming") return; // never emit frames outside streaming
     for (const frame of this.#parser.push(bytes)) this.#handleFrame(frame);
   };
 
-  #onDisconnected = (): void => {
-    this.#cleanup();
+  /** Transport callback: the link dropped (lost or via {@link disconnect}). */
+  #handleTransportDisconnect = (): void => {
+    if (this.#state !== "disconnected") this.#cleanup();
+  };
+
+  /** Transport callback: a battery-level reading (percent). */
+  #handleBattery = (percent: number): void => {
+    // Allow "pairing" — a fire-and-forget battery read may land before streaming.
+    if (this.#state === "disconnected") return;
+    this.#battery = percent;
+    this.emit("battery", percent);
   };
 
   #handleFrame(raw: RawFrame): void {
@@ -387,55 +406,17 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
   }
 
   #setState(state: ConnectionState): void {
+    if (this.#state === state) return; // dedupe: multi-path cleanup emits once
     this.#state = state;
     this.emit("connectionchange", state);
   }
 
   #cleanup(): void {
-    if (this.#txChar) {
-      try {
-        this.#txChar.removeEventListener("characteristicvaluechanged", this.#onNotify);
-      } catch {
-        /* ignore */
-      }
-    }
-    if (this.#batteryChar) {
-      try {
-        this.#batteryChar.removeEventListener("characteristicvaluechanged", this.#onBattery);
-      } catch {
-        /* ignore */
-      }
-    }
-    if (this.#device) {
-      try {
-        this.#device.removeEventListener("gattserverdisconnected", this.#onDisconnected);
-      } catch {
-        /* ignore */
-      }
-    }
     this.#stopRateTimer();
-    this.#rxChar = null;
-    this.#txChar = null;
-    this.#ctrlChar = null;
-    this.#batteryChar = null;
     this.#battery = null;
-    this.#gatt = null;
-    // #device is retained so reconnect() can reuse it without the picker.
     this.#parser.reset();
     this.#frameTimes = [];
     this.#lastFrameTs = 0;
     this.#setState("disconnected");
-  }
-
-  async #write(
-    char: BluetoothRemoteGATTCharacteristic,
-    data: Uint8Array<ArrayBuffer>,
-    withoutResponse: boolean,
-  ): Promise<void> {
-    if (withoutResponse && typeof char.writeValueWithoutResponse === "function") {
-      await char.writeValueWithoutResponse(data);
-    } else {
-      await char.writeValue(data);
-    }
   }
 }

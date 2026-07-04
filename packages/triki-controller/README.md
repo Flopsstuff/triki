@@ -1,16 +1,19 @@
 # triki-controller
 
-A dependency-free, strongly-typed **Web Bluetooth** client for the [Żabka **Triki**](https://github.com/Flopsstuff/triki)
+A strongly-typed driver for the [Żabka **Triki**](https://github.com/Flopsstuff/triki)
 BLE token (an nRF52810 BLE SoC + LSM6DSL accelerometer/gyroscope, shaped like a bottle cap).
 It connects over the Nordic UART Service, starts the IMU stream, parses the 14-byte motion
 frames, and optionally fuses orientation with a selectable 6-axis filter — **Madgwick** or
-**VQF** — so you can reuse the token as a motion controller from any web app.
+**VQF** — so you can reuse the token as a motion controller. **Web Bluetooth** in the
+browser (zero runtime dependencies), or **Node** via the optional
+[`@abandonware/noble`](https://github.com/abandonware/noble) transport.
 
 ![Triki motion controller demo](https://flopsstuff.github.io/triki/img/controller-demo.gif)
 
 ## Browser support
 
-Web Bluetooth is required:
+In the browser, Web Bluetooth is required (see [Node.js & custom transports](#nodejs--custom-transports)
+for everything else):
 
 - ✅ Desktop **Chrome / Edge / Opera** (Chromium-based).
 - ❌ **Safari and Firefox** do not implement Web Bluetooth.
@@ -71,14 +74,16 @@ standalone (the filters share an `OrientationFilter` interface).
 `new TrikiController(options?)` — `options`: `fusion?` (`"madgwick"`/`"vqf"`/`"accel"`/`"none"`,
 default `"madgwick"`), `rateHz?` (default `104`), `beta?` (Madgwick gain, default `0.08`),
 `tauAcc?` (VQF accel low-pass seconds, default `2.0`), `gyroScale?` (default `14.286`),
-`gyroBias?` / `accelBias?` (per-axis correction vectors, default zeros).
+`gyroBias?` / `accelBias?` (per-axis correction vectors, default zeros), `transport?`
+(a `TrikiTransport`; defaults to the browser's `WebBluetoothTransport`).
 
 | Member | Description |
 | --- | --- |
-| `static isSupported()` | `true` when `navigator.bluetooth` exists (SSR-safe). |
+| `static isSupported()` | `true` when `navigator.bluetooth` exists (SSR-safe). Only about the **default** Web Bluetooth transport — in Node with `NobleTransport` just call `connect()`. |
 | `connect()` | Show the picker, connect, start streaming. User gesture required. |
 | `reconnect()` | Reconnect to the last paired device without the picker. |
-| `disconnect()` | Disconnect. |
+| `disconnect()` | Disconnect. Idempotent; safe in any state — cancels a pending `connect()`. |
+| `dispose()` | Disconnect, release the transport (another controller may then attach), drop all listeners. |
 | `setLed(on)` | Green LED on/off (throws if the token has no LED characteristic). |
 | `setRate(hz)` | Set sample rate; applied live when streaming. |
 | `resetHeading()` | Re-zero yaw (no-op when fusion is off). |
@@ -91,6 +96,30 @@ default `"madgwick"`), `rateHz?` (default `104`), `beta?` (Madgwick gain, defaul
 
 Events: `frame`, `orientation` (fusion only), `connectionchange` (payload is the state string),
 `rate` (measured Hz), `battery` (level in percent, 0–100).
+
+## Node.js & custom transports
+
+The BLE link is pluggable: pass any `TrikiTransport` via the `transport` option. To
+receive the token from a plain Node process, use the **`NobleTransport`** from the
+`triki-controller/node` entry (backed by the **optional** peer dependency
+`@abandonware/noble` — installed separately, imported lazily):
+
+```sh
+npm install triki-controller @abandonware/noble
+```
+
+```ts
+import { TrikiController, NobleTransport } from "triki-controller/node";
+
+const triki = new TrikiController({ transport: new NobleTransport() });
+triki.on("orientation", (o) => console.log(o.euler));
+await triki.connect(); // scans for a "TRIKI" token (15 s budget), connects, streams
+```
+
+Options, timeout/cancellation semantics, the full `TrikiTransport` contract, and a
+runnable example live in the
+[library guide](https://flopsstuff.github.io/triki/guide/library#nodejs-receive-outside-the-browser)
+and [`example/node.mjs`](https://github.com/Flopsstuff/triki/blob/main/packages/triki-controller/example/node.mjs).
 
 ## Caveats
 
