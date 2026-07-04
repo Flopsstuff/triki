@@ -129,7 +129,7 @@ interface OrientationEvent {
 | `static isSupported()` | `true` when `navigator.bluetooth` exists (SSR-safe). |
 | `connect()` | Show the picker, connect, start streaming. User gesture required. |
 | `reconnect()` | Reconnect to the last paired device without the picker. |
-| `disconnect()` | Disconnect. |
+| `disconnect()` | Disconnect. Idempotent; safe in any state — cancels a pending `connect()`. |
 | `setLed(on)` | Green LED on/off (throws if the token has no LED characteristic). |
 | `setRate(hz)` | Set the sample rate; applied live when streaming. |
 | `resetHeading()` | Re-zero yaw (no-op when fusion is off). |
@@ -140,9 +140,15 @@ interface OrientationEvent {
 | `setGyroBias(v)` / `setAccelBias(v)` | Set the per-axis correction vectors live. |
 | `isConnected` / `state` / `rateHz` / `hasLed` / `battery` / `fusion` / `fusionAlgorithm` | Getters. |
 
-`connect()` rejects (after cleaning up) if pairing or the handshake fails, so wrap it in
-`try/catch` to surface picker errors. `reconnect()` reuses the cached device and throws
-if `connect()` was never called.
+`connect()` rejects (after cleaning up, transport included) if pairing or the handshake
+fails, so wrap it in `try/catch` to surface picker errors. `reconnect()` reuses the
+cached device and throws if `connect()` was never called.
+
+Event guarantees: precondition failures (no Web Bluetooth, nothing to reconnect to)
+reject **before** any state change — zero `connectionchange` events. Once a real
+attempt starts you get `pairing`, and on failure a single `disconnected` before the
+rejection. Calling `disconnect()` while `connect()` is pending cancels it (the pending
+promise rejects).
 
 ## Node.js (receive outside the browser)
 
@@ -177,9 +183,18 @@ prompts the terminal (or your IDE) for Bluetooth access.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `namePrefix` | `"TRIKI"` | match devices whose advertised name starts with this prefix |
+| `namePrefix` | `"TRIKI"` | match devices whose advertised name starts with this prefix (case-insensitive) |
 | `address` | — | match a specific BLE address instead of by name |
 | `noble` | `@abandonware/noble` | a noble-API-compatible module to use instead |
+| `scanTimeoutMs` | `15000` | budget for adapter power-on + scan + link setup; `Infinity` to wait forever |
+| `scanServiceUuids` | `[]` | advertised-service filter for the scan (e.g. `[NUS_SERVICE]`); empty scans everything |
+
+The whole connect attempt shares the `scanTimeoutMs` budget and rejects with a
+**`ScanTimeoutError`** when it runs out; `disconnect()` during a pending `connect()`
+rejects it with a **`ConnectAbortedError`** (both exported from
+`triki-controller/node`). `reconnect()` re-links to the exact peripheral of the
+previous successful `connect()` — no scan, so with several tokens in range it can
+never silently attach to a different one.
 
 ::: warning Native build
 `@abandonware/noble` compiles a native addon, and its bundled `node-gyp` is old enough
@@ -194,12 +209,55 @@ const triki = new TrikiController({ transport: new NobleTransport({ noble }) });
 
 ### Custom transports
 
-`NobleTransport` and the browser `WebBluetoothTransport` both implement the small
-**`TrikiTransport`** interface (`connect`, `writeRx`, `writeCtrl`, `onFrame`,
-`onDisconnect`, `disconnect`, `hasLed`). Implement it yourself to drive the controller
-over any link — a WebSocket bridge, a serial dongle, or a replay of recorded frames —
-while reusing all of the parsing and fusion. The transport is a dumb NUS pipe; the
-controller owns the Triki protocol, so the protocol logic lives in exactly one place.
+`NobleTransport` and the browser `WebBluetoothTransport` both implement the
+**`TrikiTransport`** interface. Implement it yourself to drive the controller over any
+link — a WebSocket bridge, a serial dongle, or a replay of recorded frames — while
+reusing all of the parsing and fusion. The transport is a dumb NUS pipe; the controller
+owns the Triki protocol, so the protocol logic lives in exactly one place.
+
+Required members: `attach(handlers)`, `detach()`, `connect()`, `writeRx(data,
+withoutResponse?)`, `writeCtrl(data)`, `hasLed`, `disconnect()`. Optional:
+`reconnect()` (omit it when the transport can't remember a device — the controller
+then rejects `reconnect()` with a clear error) and `preflight(op)` (synchronous
+precondition check, called before any state change).
+
+The controller claims the transport with `attach(handlers)` in its constructor — one
+controller per transport (`attach` throws if already attached). The handlers object
+carries `onFrame(bytes)`, `onDisconnect()`, and `onBattery(percent)`; call only the
+ones you have data for.
+
+The contract, in short:
+
+- `onDisconnect()` fires **exactly once** per successful `connect()`/`reconnect()`,
+  and **never** when no connect succeeded — a failed connect signals through its
+  rejection.
+- `disconnect()` is idempotent and safe in any state: it tears down an active session
+  (firing `onDisconnect` once), cancels a pending `connect()` (which then rejects),
+  and is a no-op otherwise.
+- `connect()` cleans up its own resources before rejecting.
+
+A minimal replay transport:
+
+```ts
+import type { TrikiTransport, TrikiTransportHandlers } from "triki-controller";
+
+class ReplayTransport implements TrikiTransport {
+  #handlers: TrikiTransportHandlers | null = null;
+  readonly hasLed = false;
+
+  attach(handlers: TrikiTransportHandlers): void {
+    if (this.#handlers) throw new Error("Already attached.");
+    this.#handlers = handlers;
+  }
+  detach(): void { this.#handlers = null; }
+  async connect(): Promise<void> { /* open your source */ }
+  async writeRx(): Promise<void> { /* swallow START — it's a replay */ }
+  async writeCtrl(): Promise<void> { throw new Error("No LED on a replay."); }
+  disconnect(): void { this.#handlers?.onDisconnect(); /* if connected */ }
+
+  feed(bytes: Uint8Array): void { this.#handlers?.onFrame(bytes); }
+}
+```
 
 ## Standalone primitives
 
@@ -240,9 +298,11 @@ Exported alongside the controller:
   `reset()`. `decodeCounts(frame)` decodes a single 14-byte frame.
 - `startCmd(hz)` / `ledCmd(on)` — command builders.
 - Quaternion helpers `quatMul` / `quatAboutZ` / `yawRadOf` / `eulerOf`.
-- Constants: `NUS_SERVICE` / `NUS_RX` / `NUS_TX` / `NUS_CTRL`, `START_BASE`,
-  `FRAME_LEN`, `SUPPORTED_RATES_HZ` (`[26, 52, 104, 208, 416]`), `DEFAULT_RATE_HZ`,
-  `DEFAULT_GYRO_SCALE`, `DEFAULT_ACCEL_SCALE`, `DEFAULT_BETA`, `DEFAULT_TAU_ACC`.
+- Constants: `NUS_SERVICE` / `NUS_RX` / `NUS_TX` / `NUS_CTRL`,
+  `BATTERY_SERVICE` / `BATTERY_LEVEL` (canonical 128-bit UUIDs),
+  `DEVICE_NAME_PREFIX`, `START_BASE`, `FRAME_LEN`, `SUPPORTED_RATES_HZ`
+  (`[26, 52, 104, 208, 416]`), `DEFAULT_RATE_HZ`, `DEFAULT_GYRO_SCALE`,
+  `DEFAULT_ACCEL_SCALE`, `DEFAULT_BETA`, `DEFAULT_TAU_ACC`.
 
 ## Caveats
 

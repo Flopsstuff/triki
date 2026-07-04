@@ -51,7 +51,10 @@ tools/       BLE tooling + scripts (tracked; .venv ignored)
       into a reusable, dependency-free
       [`triki-controller`](https://www.npmjs.com/package/triki-controller)
       library (browser BLE client + framework-agnostic fusion math)
-- [ ] Build a native controller bridge (joystick / OSC / HID) — the parse + fusion
-      half above is done and reusable; what's left is a native BLE transport and the
+- [x] Receive the token **outside the browser**: `triki-controller` now has a
+      pluggable transport layer with a Node `NobleTransport`
+      (see [Node.js](./library#nodejs-receive-outside-the-browser))
+- [ ] Build a native controller bridge (joystick / OSC / HID) — the parse, fusion
+      and Node BLE input halves above are done and reusable; what's left is the
       OS-level output, since a browser can't emit a real joystick / HID
       (see [Web Bluetooth controller](./controller))

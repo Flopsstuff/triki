@@ -23,9 +23,20 @@ triki.on("orientation", ({ euler }) => {
 });
 
 process.on("SIGINT", () => {
+  if (triki.state === "disconnected") process.exit(0);
+  // Exit once the BLE teardown lands, so the token isn't left connected.
+  triki.on("connectionchange", (state) => {
+    if (state === "disconnected") process.exit(0);
+  });
   triki.disconnect();
-  process.exit(0);
+  // Fallback: force-exit if the teardown stalls; unref'd so it never holds the loop.
+  setTimeout(() => process.exit(0), 1000).unref?.();
 });
 
 console.log("Scanning for a TRIKI token… (Ctrl+C to quit)");
-await triki.connect();
+try {
+  await triki.connect(); // 15 s scan budget by default; Ctrl+C mid-scan rejects
+} catch (err) {
+  console.error("[connect]", err instanceof Error ? err.message : err);
+  process.exit(1);
+}
