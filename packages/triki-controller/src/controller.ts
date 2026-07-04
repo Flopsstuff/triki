@@ -53,6 +53,29 @@ function resolveFusion(opt: boolean | FusionAlgorithm | undefined): FusionAlgori
   return opt;
 }
 
+/**
+ * Validate a custom transport's shape up front: one TypeError naming every missing
+ * member beats a property-access crash deep inside connect() (plain-JS transports
+ * get no compiler help).
+ */
+function assertTransport(t: TrikiTransport): void {
+  const isFn = (name: string): boolean =>
+    typeof (t as unknown as Record<string, unknown>)[name] === "function";
+  const problems: string[] = [];
+  for (const name of ["attach", "detach", "connect", "writeRx", "writeCtrl", "disconnect"]) {
+    if (!isFn(name)) problems.push(name);
+  }
+  if (!("hasLed" in t)) problems.push("hasLed");
+  for (const name of ["reconnect", "preflight"] as const) {
+    if (t[name] !== undefined && typeof t[name] !== "function") problems.push(name);
+  }
+  if (problems.length) {
+    throw new TypeError(
+      `Invalid TrikiTransport: missing or non-function member(s): ${problems.join(", ")}.`,
+    );
+  }
+}
+
 const RATE_WINDOW_MS = 1000;
 const MAX_DT_S = 0.2;
 
@@ -86,9 +109,12 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
     this.#tauAcc = options.tauAcc ?? DEFAULT_TAU_ACC;
     this.#filter = this.#makeFilter(this.#algo);
     this.#transport = options.transport ?? new WebBluetoothTransport();
-    this.#transport.onFrame(this.#ingest);
-    this.#transport.onDisconnect(this.#handleTransportDisconnect);
-    this.#transport.onBattery(this.#handleBattery);
+    assertTransport(this.#transport);
+    this.#transport.attach({
+      onFrame: this.#ingest,
+      onDisconnect: this.#handleTransportDisconnect,
+      onBattery: this.#handleBattery,
+    });
   }
 
   #makeFilter(algo: FusionAlgorithm): OrientationFilter | null {
@@ -141,44 +167,40 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
   /**
    * Connect through the transport and start the IMU stream. With the default Web
    * Bluetooth transport this shows the device picker and must be called from a user
-   * gesture (e.g. a click handler). Rejects (after cleaning up) if the transport or
-   * the handshake fails.
+   * gesture (e.g. a click handler). Precondition failures (e.g. no Web Bluetooth)
+   * reject with zero `connectionchange` events; after a real attempt starts, failure
+   * cleans up (transport included) and rejects after a `disconnected` event.
    */
   async connect(): Promise<void> {
-    if (this.#state !== "disconnected") return;
-    try {
-      this.#setState("pairing");
-      await this.#transport.connect();
-      await this.#startStreaming();
-    } catch (err) {
-      this.#cleanup();
-      throw err;
-    }
+    return this.#open("connect", () => this.#transport.connect());
   }
 
   /**
-   * Reconnect to the previously selected device without re-prompting. Throws if the
-   * transport does not support reconnecting (e.g. {@link connect} was never called).
+   * Reconnect to the previously selected device without re-prompting. Rejects with
+   * zero events if the transport does not support reconnecting or has no device to
+   * reconnect to (e.g. {@link connect} was never called).
    */
   async reconnect(): Promise<void> {
-    if (this.#state !== "disconnected") return;
-    if (!this.#transport.reconnect) {
+    if (typeof this.#transport.reconnect !== "function") {
       throw new Error("This transport does not support reconnect().");
     }
-    try {
-      this.#setState("pairing");
-      await this.#transport.reconnect();
-      await this.#startStreaming();
-    } catch (err) {
-      this.#cleanup();
-      throw err;
-    }
+    return this.#open("reconnect", () => this.#transport.reconnect!());
   }
 
-  /** Disconnect from the token. Triggers a `connectionchange` to `disconnected`. */
+  /**
+   * Disconnect from the token. Idempotent and safe in any state — including a pending
+   * {@link connect} (which then rejects). Triggers a `connectionchange` to
+   * `disconnected` when leaving `pairing`/`streaming`.
+   */
   disconnect(): void {
-    if (this.#state === "disconnected") return;
-    this.#transport.disconnect();
+    try {
+      this.#transport.disconnect();
+    } catch {
+      /* still reset local state below */
+    }
+    // The transport's onDisconnect normally drives this; the fallback keeps the
+    // controller recoverable even against a buggy transport.
+    if (this.#state !== "disconnected") this.#cleanup();
   }
 
   /** Turn the green LED on or off. Throws when the LED characteristic is unavailable. */
@@ -247,15 +269,42 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
 
   // --- internal ----------------------------------------------------------------
 
-  /** Start the stream once the transport is connected: send START, begin timers. */
-  async #startStreaming(): Promise<void> {
-    await this.#transport.writeRx(startCmd(this.#rateHz), true);
-    this.#startRateTimer();
-    this.#setState("streaming");
+  /**
+   * Shared connect/reconnect flow: sync pre-flight (zero events on failure), then
+   * `pairing` → establish → START → `streaming`; any failure (including a
+   * {@link disconnect} racing the awaits) cleans up locally, closes the transport
+   * best-effort, and rethrows.
+   */
+  async #open(op: "connect" | "reconnect", establish: () => Promise<void>): Promise<void> {
+    if (this.#state !== "disconnected") return;
+    this.#transport.preflight?.(op); // throw → rejection with zero connectionchange events
+    this.#setState("pairing");
+    try {
+      await establish();
+      this.#assertPairing();
+      await this.#transport.writeRx(startCmd(this.#rateHz), true);
+      this.#assertPairing();
+      this.#startRateTimer();
+      this.#setState("streaming");
+    } catch (err) {
+      this.#cleanup();
+      try {
+        this.#transport.disconnect(); // close a half-open link; #setState dedupes
+      } catch {
+        /* best-effort */
+      }
+      throw err;
+    }
+  }
+
+  /** A disconnect (or lost link) intervened while connecting. */
+  #assertPairing(): void {
+    if (this.#state !== "pairing") throw new Error("Connection cancelled while connecting.");
   }
 
   /** Transport callback: decode inbound notification bytes into frames. */
   #ingest = (bytes: Uint8Array): void => {
+    if (this.#state !== "streaming") return; // never emit frames outside streaming
     for (const frame of this.#parser.push(bytes)) this.#handleFrame(frame);
   };
 
@@ -266,6 +315,8 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
 
   /** Transport callback: a battery-level reading (percent). */
   #handleBattery = (percent: number): void => {
+    // Allow "pairing" — a fire-and-forget battery read may land before streaming.
+    if (this.#state === "disconnected") return;
     this.#battery = percent;
     this.emit("battery", percent);
   };
@@ -324,6 +375,7 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
   }
 
   #setState(state: ConnectionState): void {
+    if (this.#state === state) return; // dedupe: multi-path cleanup emits once
     this.#state = state;
     this.emit("connectionchange", state);
   }

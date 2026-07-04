@@ -3,8 +3,16 @@
  * touches `navigator.bluetooth`, and it is the default transport used by
  * {@link TrikiController} in the browser.
  */
-import { NUS_SERVICE, NUS_RX, NUS_TX, NUS_CTRL, BATTERY_SERVICE, BATTERY_LEVEL } from "../protocol";
-import type { TrikiTransport } from "../transport";
+import {
+  NUS_SERVICE,
+  NUS_RX,
+  NUS_TX,
+  NUS_CTRL,
+  BATTERY_SERVICE,
+  BATTERY_LEVEL,
+  DEVICE_NAME_PREFIX,
+} from "../protocol";
+import type { TrikiTransport, TrikiTransportHandlers } from "../transport";
 
 export class WebBluetoothTransport implements TrikiTransport {
   #device: BluetoothDevice | null = null;
@@ -13,9 +21,13 @@ export class WebBluetoothTransport implements TrikiTransport {
   #txChar: BluetoothRemoteGATTCharacteristic | null = null;
   #ctrlChar: BluetoothRemoteGATTCharacteristic | null = null;
   #batteryChar: BluetoothRemoteGATTCharacteristic | null = null;
-  #frameHandler: ((bytes: Uint8Array) => void) | null = null;
-  #disconnectHandler: (() => void) | null = null;
-  #batteryHandler: ((percent: number) => void) | null = null;
+  #handlers: TrikiTransportHandlers | null = null;
+  /** True only between a successful connect()/reconnect() and the next teardown. */
+  #connected = false;
+  /** True while a connect()/reconnect() is in flight. */
+  #connecting = false;
+  /** Set by disconnect() during a pending connect; honored at the next checkpoint. */
+  #cancelRequested = false;
 
   /** True when Web Bluetooth is available (safe to call during SSR). */
   static isSupported(): boolean {
@@ -26,16 +38,23 @@ export class WebBluetoothTransport implements TrikiTransport {
     return this.#ctrlChar !== null;
   }
 
-  onFrame(handler: (bytes: Uint8Array) => void): void {
-    this.#frameHandler = handler;
+  attach(handlers: TrikiTransportHandlers): void {
+    if (this.#handlers) throw new Error("WebBluetoothTransport is already attached.");
+    this.#handlers = handlers;
   }
 
-  onDisconnect(handler: () => void): void {
-    this.#disconnectHandler = handler;
+  detach(): void {
+    this.#handlers = null;
   }
 
-  onBattery(handler: (percent: number) => void): void {
-    this.#batteryHandler = handler;
+  /** Synchronous pre-flight: fail before any state change when the op cannot succeed. */
+  preflight(op: "connect" | "reconnect"): void {
+    if (!WebBluetoothTransport.isSupported()) {
+      throw new Error("Web Bluetooth is not available in this environment.");
+    }
+    if (op === "reconnect" && !this.#device) {
+      throw new Error("No device to reconnect to; call connect() first.");
+    }
   }
 
   /**
@@ -43,20 +62,37 @@ export class WebBluetoothTransport implements TrikiTransport {
    * gesture (e.g. a click handler).
    */
   async connect(): Promise<void> {
-    if (!WebBluetoothTransport.isSupported()) {
-      throw new Error("Web Bluetooth is not available in this environment.");
+    this.preflight("connect");
+    this.#connecting = true;
+    this.#cancelRequested = false;
+    try {
+      // A pending requestDevice picker cannot be cancelled programmatically;
+      // disconnect() during it takes effect at the checkpoint below.
+      this.#device = await navigator.bluetooth.requestDevice({
+        // Web Bluetooth prefix matching is case-sensitive, hence both shipped casings
+        // (noble's transport matches case-insensitively — inherently broader).
+        filters: [{ namePrefix: DEVICE_NAME_PREFIX }, { namePrefix: "Triki" }],
+        optionalServices: [NUS_SERVICE, BATTERY_SERVICE],
+      });
+      this.#checkCancelled();
+      await this.#openSession();
+    } finally {
+      this.#connecting = false;
+      this.#cancelRequested = false;
     }
-    this.#device = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: "TRIKI" }, { namePrefix: "Triki" }],
-      optionalServices: [NUS_SERVICE, BATTERY_SERVICE],
-    });
-    await this.#openSession();
   }
 
   /** Reconnect to the previously paired device without showing the picker. */
   async reconnect(): Promise<void> {
-    if (!this.#device) throw new Error("No device to reconnect to; call connect() first.");
-    await this.#openSession();
+    this.preflight("reconnect");
+    this.#connecting = true;
+    this.#cancelRequested = false;
+    try {
+      await this.#openSession();
+    } finally {
+      this.#connecting = false;
+      this.#cancelRequested = false;
+    }
   }
 
   async writeRx(data: Uint8Array, withoutResponse = false): Promise<void> {
@@ -66,15 +102,27 @@ export class WebBluetoothTransport implements TrikiTransport {
 
   async writeCtrl(data: Uint8Array): Promise<void> {
     if (!this.#ctrlChar) throw new Error("LED control characteristic is not available.");
-    await this.#ctrlChar.writeValue(data as BufferSource);
+    await this.#write(this.#ctrlChar, data, false);
   }
 
   disconnect(): void {
-    if (this.#gatt && this.#gatt.connected) this.#gatt.disconnect();
-    else this.#onGattDisconnected();
+    if (this.#connecting) {
+      // Cancel the pending connect: the in-flight session setup rejects at its next
+      // checkpoint (or its GATT await fails once the link drops). No onDisconnect —
+      // the connect() rejection is the signal.
+      this.#cancelRequested = true;
+      if (this.#gatt?.connected) this.#gatt.disconnect();
+      return;
+    }
+    if (this.#gatt?.connected) this.#gatt.disconnect();
+    // Never connected (or already torn down): idempotent no-op, no onDisconnect.
   }
 
   // --- internal ----------------------------------------------------------------
+
+  #checkCancelled(): void {
+    if (this.#cancelRequested) throw new Error("Connection cancelled by disconnect().");
+  }
 
   async #openSession(): Promise<void> {
     const device = this.#device;
@@ -84,20 +132,34 @@ export class WebBluetoothTransport implements TrikiTransport {
       device.addEventListener("gattserverdisconnected", this.#onGattDisconnected);
 
       this.#gatt = await device.gatt.connect();
+      this.#checkCancelled();
       const svc = await this.#gatt.getPrimaryService(NUS_SERVICE);
+      this.#checkCancelled();
       this.#rxChar = await svc.getCharacteristic(NUS_RX);
+      this.#checkCancelled();
       this.#txChar = await svc.getCharacteristic(NUS_TX);
+      this.#checkCancelled();
       try {
         this.#ctrlChar = await svc.getCharacteristic(NUS_CTRL);
       } catch {
         this.#ctrlChar = null;
       }
+      this.#checkCancelled();
 
       await this.#txChar.startNotifications();
+      this.#checkCancelled();
       this.#txChar.addEventListener("characteristicvaluechanged", this.#onNotify);
 
+      this.#connected = true;
       void this.#startBattery(this.#gatt); // best-effort; never blocks streaming
     } catch (err) {
+      // Don't leave a half-open link behind a rejected connect. If the GATT drop
+      // fires #onGattDisconnected, #connected is still false, so no onDisconnect.
+      try {
+        if (this.#gatt?.connected) this.#gatt.disconnect();
+      } catch {
+        /* best-effort */
+      }
       this.#teardown();
       throw err;
     }
@@ -140,7 +202,7 @@ export class WebBluetoothTransport implements TrikiTransport {
   };
 
   #emitBattery(view: DataView): void {
-    this.#batteryHandler?.(view.getUint8(0));
+    this.#handlers?.onBattery(view.getUint8(0));
   }
 
   #onNotify = (event: Event): void => {
@@ -149,15 +211,19 @@ export class WebBluetoothTransport implements TrikiTransport {
     if (!view) return;
     // byteOffset/byteLength are load-bearing: the underlying buffer may be larger.
     const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
-    this.#frameHandler?.(bytes);
+    this.#handlers?.onFrame(bytes);
   };
 
   #onGattDisconnected = (): void => {
+    // onDisconnect fires exactly once per successful connect — and never for a
+    // link that dropped before connect() resolved (the rejection is the signal).
+    const wasConnected = this.#connected;
     this.#teardown();
-    this.#disconnectHandler?.();
+    if (wasConnected) this.#handlers?.onDisconnect();
   };
 
   #teardown(): void {
+    this.#connected = false;
     if (this.#txChar) {
       try {
         this.#txChar.removeEventListener("characteristicvaluechanged", this.#onNotify);

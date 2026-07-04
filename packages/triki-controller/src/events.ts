@@ -80,7 +80,8 @@ export interface TrikiControllerOptions {
   /**
    * BLE transport. Defaults to a `WebBluetoothTransport` (browser). Pass a
    * `NobleTransport` (from `triki-controller/node`) to receive outside the browser,
-   * or any object implementing {@link TrikiTransport}.
+   * or any object implementing {@link TrikiTransport}. The controller claims the
+   * transport via `attach()` in its constructor — one controller per transport.
    */
   transport?: TrikiTransport;
 }

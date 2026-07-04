@@ -291,6 +291,28 @@ describe("lifecycle", () => {
     h.gatt.disconnect(); // simulate the peripheral dropping the link
     expect(ctrl.state).toBe("disconnected");
   });
+
+  test("connect() without Web Bluetooth rejects with zero connectionchange events", async () => {
+    vi.stubGlobal("navigator", {}); // no navigator.bluetooth
+    const ctrl = make({ fusion: "none" });
+    const states: ConnectionState[] = [];
+    ctrl.on("connectionchange", (s) => states.push(s));
+
+    await expect(ctrl.connect()).rejects.toThrow("Web Bluetooth is not available");
+    expect(states).toEqual([]); // preflight fails before any state change
+    expect(ctrl.state).toBe("disconnected");
+  });
+
+  test("reconnect() before any connect() rejects with zero connectionchange events", async () => {
+    install();
+    const ctrl = make({ fusion: "none" });
+    const states: ConnectionState[] = [];
+    ctrl.on("connectionchange", (s) => states.push(s));
+
+    await expect(ctrl.reconnect()).rejects.toThrow("No device to reconnect to");
+    expect(states).toEqual([]);
+    expect(ctrl.state).toBe("disconnected");
+  });
 });
 
 describe("rate measurement", () => {
