@@ -211,6 +211,17 @@ describe("battery", () => {
     expect(ctrl.battery).toBe(42);
   });
 
+  test("ignores an empty battery payload instead of throwing", async () => {
+    const h = install({ batteryLevel: 87 });
+    const ctrl = make({ fusion: "none" });
+    await ctrl.connect();
+    await flush(); // battery read + subscription settle
+
+    // A 0-byte ATT value is protocol-legal; getUint8(0) on it would RangeError.
+    h.battery!.notify(new Uint8Array(0));
+    expect(ctrl.battery).toBe(87); // the initial read stands, the empty update is dropped
+  });
+
   test("tolerates a token without the Battery service", async () => {
     install({ battery: false });
     const ctrl = make({ fusion: "none" });

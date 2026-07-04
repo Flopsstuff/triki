@@ -59,7 +59,8 @@ describe("happy path", () => {
 
     await transport.connect();
 
-    expect(noble.startScanArgs).toEqual([{ serviceUuids: [], allowDuplicates: false }]);
+    // allowDuplicates=true: the advertised name may only arrive in a scan response.
+    expect(noble.startScanArgs).toEqual([{ serviceUuids: [], allowDuplicates: true }]);
     expect(noble.stopScanCount).toBe(1);
     expect(peripheral.connectCount).toBe(1);
     // NUS + Battery discovered in ONE GATT round trip.
@@ -359,6 +360,66 @@ describe("reconnect", () => {
     peripheral.txSubscribeError = null;
     await transport.reconnect();
     expect(peripheral.connectCount).toBe(2);
+  });
+});
+
+describe("review regressions", () => {
+  test("same-tick disconnect() then connect() retries cleanly", async () => {
+    const { transport, noble, peripheral } = rig({ autoDiscover: false });
+    const first = transport.connect();
+    first.catch(() => {});
+    await flush(); // scanning
+
+    transport.disconnect();
+    const second = transport.connect(); // same tick as the cancel — must not be refused
+    await expect(first).rejects.toThrow(ConnectAbortedError);
+
+    await flush(); // second scan armed
+    noble.discover(peripheral);
+    await second;
+    expect(peripheral.connectCount).toBe(1); // only the retry connected
+  });
+
+  test("the scan is stopped before connectAsync is issued", async () => {
+    const { transport, noble } = rig();
+    await transport.connect();
+    expect(noble.log).toEqual(["stopScan", "connect"]);
+  });
+
+  test("a write pending on a dead link rejects on disconnect instead of hanging", async () => {
+    const { transport, peripheral } = rig();
+    await transport.connect();
+
+    const gate = deferred();
+    peripheral.rx!.writeGate = gate.promise;
+    const write = transport.writeRx(startCmd(104), true);
+    transport.disconnect(); // noble would never settle the write callback
+    await expect(write).rejects.toThrow("Disconnected.");
+    gate.resolve(); // late settle must be inert
+    await flush();
+  });
+
+  test("buffered TX notifications after disconnect never reach onFrame", async () => {
+    const { transport, peripheral, events } = rig();
+    await transport.connect();
+    const tx = peripheral.tx!;
+
+    transport.disconnect();
+    tx.emitData(Uint8Array.of(1, 2, 3)); // still buffered in the stack
+    expect(events.frames).toHaveLength(0);
+  });
+
+  test("teardown removes only the transport's own disconnect listener", async () => {
+    const { transport, peripheral } = rig();
+    await transport.connect();
+
+    // Third-party code sharing noble's cached peripheral object.
+    const thirdParty = vi.fn();
+    peripheral.once("disconnect", thirdParty);
+
+    transport.disconnect(); // teardown must not clobber the third-party listener
+    await flush(); // noble's own async 'disconnect' echo lands
+    expect(thirdParty).toHaveBeenCalledTimes(1);
   });
 });
 

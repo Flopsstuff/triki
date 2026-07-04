@@ -79,10 +79,11 @@ default `"madgwick"`), `rateHz?` (default `104`), `beta?` (Madgwick gain, defaul
 
 | Member | Description |
 | --- | --- |
-| `static isSupported()` | `true` when `navigator.bluetooth` exists (SSR-safe). |
+| `static isSupported()` | `true` when `navigator.bluetooth` exists (SSR-safe). Only about the **default** Web Bluetooth transport — in Node with `NobleTransport` just call `connect()`. |
 | `connect()` | Show the picker, connect, start streaming. User gesture required. |
 | `reconnect()` | Reconnect to the last paired device without the picker. |
 | `disconnect()` | Disconnect. Idempotent; safe in any state — cancels a pending `connect()`. |
+| `dispose()` | Disconnect, release the transport (another controller may then attach), drop all listeners. |
 | `setLed(on)` | Green LED on/off (throws if the token has no LED characteristic). |
 | `setRate(hz)` | Set sample rate; applied live when streaming. |
 | `resetHeading()` | Re-zero yaw (no-op when fusion is off). |
@@ -118,7 +119,7 @@ await triki.connect(); // scans for a "TRIKI" token (15 s budget), connects, str
 Options, timeout/cancellation semantics, the full `TrikiTransport` contract, and a
 runnable example live in the
 [library guide](https://flopsstuff.github.io/triki/guide/library#nodejs-receive-outside-the-browser)
-and [`example/node.mjs`](./example/node.mjs).
+and [`example/node.mjs`](https://github.com/Flopsstuff/triki/blob/main/packages/triki-controller/example/node.mjs).
 
 ## Caveats
 

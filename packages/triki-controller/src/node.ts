@@ -6,6 +6,6 @@
  * outside the browser. Keeping it on a separate entry means the default browser bundle
  * never imports noble.
  */
-export * from "./index";
-export { NobleTransport, ScanTimeoutError, ConnectAbortedError, nobleUuid } from "./transports/noble";
+export * from "./index"; // includes ScanTimeoutError / ConnectAbortedError
+export { NobleTransport, nobleUuid } from "./transports/noble";
 export type { NobleTransportOptions } from "./transports/noble";

@@ -21,6 +21,7 @@ import {
   ledCmd,
 } from "./protocol";
 import { WebBluetoothTransport } from "./transports/web-bluetooth";
+import { ConnectAbortedError } from "./transport";
 import type { TrikiTransport } from "./transport";
 import type {
   ConnectionState,
@@ -59,6 +60,9 @@ function resolveFusion(opt: boolean | FusionAlgorithm | undefined): FusionAlgori
  * get no compiler help).
  */
 function assertTransport(t: TrikiTransport): void {
+  if (t === null || (typeof t !== "object" && typeof t !== "function")) {
+    throw new TypeError(`Invalid TrikiTransport: expected an object, got ${typeof t}.`);
+  }
   const isFn = (name: string): boolean =>
     typeof (t as unknown as Record<string, unknown>)[name] === "function";
   const problems: string[] = [];
@@ -89,6 +93,8 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
   #beta: number;
   #tauAcc: number;
   #state: ConnectionState = "disconnected";
+  /** Bumped by every #open; failure paths compare it to ignore superseded attempts. */
+  #epoch = 0;
   #rateHz: number;
   #gyroScale: number;
   #gyroBias: Vec3;
@@ -193,14 +199,28 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
    * `disconnected` when leaving `pairing`/`streaming`.
    */
   disconnect(): void {
+    const epoch = this.#epoch;
     try {
       this.#transport.disconnect();
     } catch {
       /* still reset local state below */
     }
     // The transport's onDisconnect normally drives this; the fallback keeps the
-    // controller recoverable even against a buggy transport.
-    if (this.#state !== "disconnected") this.#cleanup();
+    // controller recoverable even against a buggy transport. The epoch guard skips it
+    // when a listener already started a NEW attempt during the synchronous
+    // onDisconnect cascade — its 'pairing' state is not ours to reset.
+    if (this.#epoch === epoch && this.#state !== "disconnected") this.#cleanup();
+  }
+
+  /**
+   * Release this controller: disconnect, detach from the transport (so another
+   * controller may attach), and drop all event listeners. The controller must not be
+   * used afterwards.
+   */
+  dispose(): void {
+    this.disconnect();
+    this.#transport.detach();
+    this.removeAllListeners();
   }
 
   /** Turn the green LED on or off. Throws when the LED characteristic is unavailable. */
@@ -272,34 +292,45 @@ export class TrikiController extends TypedEmitter<TrikiEventMap> {
   /**
    * Shared connect/reconnect flow: sync pre-flight (zero events on failure), then
    * `pairing` → establish → START → `streaming`; any failure (including a
-   * {@link disconnect} racing the awaits) cleans up locally, closes the transport
-   * best-effort, and rethrows.
+   * {@link disconnect} racing the awaits) closes the transport, cleans up locally,
+   * and rethrows. The epoch token makes the failure path attempt-aware: a superseded
+   * attempt's late rejection must neither touch the transport nor reset the state a
+   * NEWER attempt owns.
    */
   async #open(op: "connect" | "reconnect", establish: () => Promise<void>): Promise<void> {
     if (this.#state !== "disconnected") return;
     this.#transport.preflight?.(op); // throw → rejection with zero connectionchange events
+    const epoch = ++this.#epoch;
     this.#setState("pairing");
     try {
       await establish();
-      this.#assertPairing();
+      this.#assertCurrent(epoch);
       await this.#transport.writeRx(startCmd(this.#rateHz), true);
-      this.#assertPairing();
+      this.#assertCurrent(epoch);
       this.#startRateTimer();
       this.#setState("streaming");
     } catch (err) {
-      this.#cleanup();
-      try {
-        this.#transport.disconnect(); // close a half-open link; #setState dedupes
-      } catch {
-        /* best-effort */
+      if (this.#epoch === epoch) {
+        // Close the transport BEFORE emitting 'disconnected', so a retry started
+        // synchronously from a connectionchange listener runs against a fully
+        // torn-down transport instead of being cancelled by us a moment later.
+        try {
+          this.#transport.disconnect();
+        } catch {
+          /* best-effort */
+        }
+        // A listener may have started a new attempt during the emit above.
+        if (this.#epoch === epoch && this.#state !== "disconnected") this.#cleanup();
       }
       throw err;
     }
   }
 
-  /** A disconnect (or lost link) intervened while connecting. */
-  #assertPairing(): void {
-    if (this.#state !== "pairing") throw new Error("Connection cancelled while connecting.");
+  /** A disconnect (or a newer attempt) intervened while connecting. */
+  #assertCurrent(epoch: number): void {
+    if (this.#epoch !== epoch || this.#state !== "pairing") {
+      throw new ConnectAbortedError("Connection cancelled while connecting.");
+    }
   }
 
   /** Transport callback: decode inbound notification bytes into frames. */

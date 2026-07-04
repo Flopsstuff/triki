@@ -6,15 +6,20 @@
  *   connects, discovers the NUS + Battery characteristics in one GATT round trip, and
  *   subscribes to TX notifications. The whole attempt shares one time budget
  *   ({@link NobleTransportOptions.scanTimeoutMs}, default 15 s) and rejects with
- *   {@link ScanTimeoutError} when it runs out.
+ *   {@link ScanTimeoutError} when it runs out. Session state is committed only after
+ *   every step succeeds, so a failed or cancelled attempt never leaks half-built state.
  * - `disconnect()` is idempotent: it cancels a pending `connect()` (which then rejects
  *   with {@link ConnectAbortedError}), tears down an active session (firing
- *   `onDisconnect` exactly once), and is a no-op otherwise.
- * - `reconnect()` re-links to the exact peripheral of the previous successful
- *   `connect()` — no scan, so it can never latch onto a different token — and throws
+ *   `onDisconnect` exactly once), and is a no-op otherwise. A retry `connect()` may be
+ *   issued immediately after the cancelling `disconnect()` — same tick is fine.
+ * - `reconnect()` re-links to the exact peripheral matched by the previous `connect()`
+ *   scan — no new scan, so it can never latch onto a different token — and throws
  *   when there is nothing to reconnect to.
  * - The battery read/subscribe is fire-and-forget: it never delays `connect()` or the
  *   controller's START command.
+ * - Writes are bounded: noble never settles pending GATT callbacks on a dropped link,
+ *   so `writeRx`/`writeCtrl` race the session teardown and the `scanTimeoutMs` budget
+ *   instead of hanging forever.
  *
  * `@abandonware/noble` is an **optional peer dependency**: it is imported lazily and
  * only required when {@link NobleTransport.connect} runs, so importing
@@ -26,29 +31,16 @@
  * ```
  */
 import { NUS_SERVICE, NUS_RX, NUS_TX, NUS_CTRL, BATTERY_SERVICE, BATTERY_LEVEL, DEVICE_NAME_PREFIX } from "../protocol";
+import { ScanTimeoutError, ConnectAbortedError } from "../transport";
 import type { TrikiTransport, TrikiTransportHandlers } from "../transport";
+
+export { ScanTimeoutError, ConnectAbortedError };
 
 // Node's Buffer, declared locally so this file needs no `@types/node` (noble's writes
 // want a Buffer; it is a Uint8Array subclass at runtime).
 declare const Buffer: {
   from(buffer: ArrayBufferLike, byteOffset?: number, length?: number): Uint8Array;
 };
-
-/** The connect()/scan budget ran out before a device was streaming. */
-export class ScanTimeoutError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ScanTimeoutError";
-  }
-}
-
-/** disconnect() was called while a connect()/reconnect() was still pending. */
-export class ConnectAbortedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ConnectAbortedError";
-  }
-}
 
 /** Default budget for adapter power-on + scan + link setup, in milliseconds. */
 const DEFAULT_SCAN_TIMEOUT_MS = 15_000;
@@ -61,7 +53,11 @@ export interface NobleTransportOptions {
    * {@link address} is set.
    */
   namePrefix?: string;
-  /** Match a specific device by BLE address (case-insensitive) instead of by name. */
+  /**
+   * Match a specific device by BLE address or noble peripheral id (case-insensitive)
+   * instead of by name. Note: on macOS CoreBluetooth hides MAC addresses (noble
+   * reports an empty `address`), so use the peripheral **id** there.
+   */
   address?: string;
   /**
    * A noble-API-compatible module to use instead of lazily importing
@@ -71,8 +67,9 @@ export interface NobleTransportOptions {
   noble?: unknown;
   /**
    * Time budget in milliseconds for the whole connect attempt: adapter power-on, the
-   * scan, and link setup (reconnect shares the same budget). Default 15 000. Pass
-   * `Infinity` to wait forever (cancel via `disconnect()`).
+   * scan, and link setup (reconnect and writes share the same budget). Default
+   * 15 000. Pass `Infinity` to wait forever (cancel via `disconnect()`). Zero,
+   * negative, or non-numeric values fall back to the default.
    */
   scanTimeoutMs?: number;
   /**
@@ -99,7 +96,8 @@ interface NobleCharacteristic {
 
 interface NoblePeripheral {
   /** Stable device id. noble caches Peripheral objects by id, and a cached peripheral
-   *  supports `connectAsync()` again after `disconnectAsync()` — reconnect relies on it. */
+   *  supports `connectAsync()` again after `disconnectAsync()` — reconnect relies on it.
+   *  On macOS this is the only stable identifier (CoreBluetooth hides MAC addresses). */
   readonly id: string;
   readonly address: string;
   readonly advertisement: { localName?: string };
@@ -110,7 +108,8 @@ interface NoblePeripheral {
     characteristicUuids: string[],
   ): Promise<{ characteristics: NobleCharacteristic[] }>;
   once(event: "disconnect", listener: () => void): this;
-  removeAllListeners(event?: string): this;
+  /** Peripheral objects are shared module-globally; remove ONLY our own listener. */
+  removeListener(event: "disconnect", listener: () => void): this;
 }
 
 interface Noble {
@@ -167,6 +166,8 @@ interface ConnectAttempt {
   cancelled: boolean;
   /** Rejecter of whichever cancellable wait is pending; disconnect() invokes it. */
   fail: ((err: Error) => void) | null;
+  /** The peripheral this attempt is linking to, once known — the abort path drops it. */
+  peripheral: NoblePeripheral | null;
 }
 
 export class NobleTransport implements TrikiTransport {
@@ -179,12 +180,15 @@ export class NobleTransport implements TrikiTransport {
   #noble: Noble | null = null; // lazily-loaded module, cached across sessions
   #handlers: TrikiTransportHandlers | null = null;
   #attempt: ConnectAttempt | null = null;
-  /** True only between connect()/reconnect() resolving and the next teardown. */
+  /** True only between connect()/reconnect() committing a session and its teardown. */
   #sessionActive = false;
   #peripheral: NoblePeripheral | null = null;
   #rxChar: NobleCharacteristic | null = null;
   #txChar: NobleCharacteristic | null = null;
   #ctrlChar: NobleCharacteristic | null = null;
+  /** Rejects when the session tears down — bounds writes that noble would never settle. */
+  #dropped: Promise<never> | null = null;
+  #rejectDropped: ((err: Error) => void) | null = null;
   /** Retained across teardown so reconnect() can re-link without a scan. */
   #lastPeripheral: NoblePeripheral | null = null;
 
@@ -227,19 +231,19 @@ export class NobleTransport implements TrikiTransport {
       this.#checkCancelled(attempt);
       const peripheral = await this.#scan(noble, attempt, deadline);
       this.#checkCancelled(attempt);
-      // Cached as soon as the scan matches, so reconnect() works even when the rest
-      // of this attempt fails (mirrors the web transport retaining its #device).
+      // Cached as soon as the scan matches, so reconnect() can re-link even when the
+      // rest of this attempt fails (mirrors the web transport retaining its #device).
       this.#lastPeripheral = peripheral;
       await this.#openSession(peripheral, attempt, deadline);
     } catch (err) {
-      this.#abortAttempt();
+      this.#abortAttempt(attempt);
       throw err;
     } finally {
-      this.#attempt = null;
+      if (this.#attempt === attempt) this.#attempt = null;
     }
   }
 
-  /** Re-link to the peripheral of the previous successful connect() — no scan. */
+  /** Re-link to the peripheral matched by the previous connect() scan — no new scan. */
   async reconnect(): Promise<void> {
     this.preflight("reconnect");
     const peripheral = this.#lastPeripheral!;
@@ -249,39 +253,46 @@ export class NobleTransport implements TrikiTransport {
       this.#checkCancelled(attempt);
       await this.#openSession(peripheral, attempt, deadline);
     } catch (err) {
-      this.#abortAttempt();
+      this.#abortAttempt(attempt);
       throw err;
     } finally {
-      this.#attempt = null;
+      if (this.#attempt === attempt) this.#attempt = null;
     }
   }
 
   async writeRx(data: Uint8Array, withoutResponse = false): Promise<void> {
-    if (!this.#rxChar) throw new Error("Not connected.");
-    await this.#rxChar.writeAsync(toBuffer(data), withoutResponse);
+    const rx = this.#rxChar;
+    if (!rx) throw new Error("Not connected.");
+    await this.#boundedWrite(rx.writeAsync(toBuffer(data), withoutResponse));
   }
 
   async writeCtrl(data: Uint8Array): Promise<void> {
-    if (!this.#ctrlChar) throw new Error("LED control characteristic is not available.");
-    await this.#ctrlChar.writeAsync(toBuffer(data), false);
+    const ctrl = this.#ctrlChar;
+    if (!ctrl) throw new Error("LED control characteristic is not available.");
+    await this.#boundedWrite(ctrl.writeAsync(toBuffer(data), false));
   }
 
   disconnect(): void {
-    const attempt = this.#attempt;
-    if (attempt) {
-      // Cancel the pending connect: reject the cancellable wait (scan / power-on) or
-      // let the next checkpoint throw; drop a half-connected peripheral so pending
-      // GATT awaits settle. No onDisconnect — the connect() rejection is the signal.
-      attempt.cancelled = true;
-      attempt.fail?.(new ConnectAbortedError("Disconnected while connecting."));
-      const peripheral = this.#peripheral;
-      if (peripheral) void peripheral.disconnectAsync().catch(() => {});
+    // Active session first: in the microtask window where a just-committed session
+    // still has its attempt pending in connect()'s finally, this is a real disconnect,
+    // not a cancellation — connect() has effectively succeeded.
+    if (this.#sessionActive) {
+      const peripheral = this.#peripheral!;
+      this.#finishSession();
+      void peripheral.disconnectAsync().catch(() => {});
       return;
     }
-    if (!this.#sessionActive) return; // idempotent; never connected -> no onDisconnect
-    const peripheral = this.#peripheral!;
-    this.#finishSession();
-    void peripheral.disconnectAsync().catch(() => {});
+    const attempt = this.#attempt;
+    if (attempt) {
+      // Cancel the pending connect: reject the cancellable wait (or let the next
+      // checkpoint throw). The attempt's own abort path drops any half-open link.
+      // #attempt is cleared HERE so a same-tick retry connect() is not refused.
+      attempt.cancelled = true;
+      this.#attempt = null;
+      attempt.fail?.(new ConnectAbortedError("Disconnected while connecting."));
+      return;
+    }
+    // Never connected (or already torn down): idempotent no-op, no onDisconnect.
   }
 
   // --- internal ----------------------------------------------------------------
@@ -290,7 +301,7 @@ export class NobleTransport implements TrikiTransport {
   async #beginAttempt(): Promise<{ noble: Noble; attempt: ConnectAttempt; deadline: number }> {
     if (this.#attempt) throw new Error("connect() is already in progress.");
     if (this.#sessionActive) throw new Error("Already connected.");
-    const attempt: ConnectAttempt = { cancelled: false, fail: null };
+    const attempt: ConnectAttempt = { cancelled: false, fail: null, peripheral: null };
     this.#attempt = attempt;
     const deadline = Number.isFinite(this.#scanTimeoutMs)
       ? Date.now() + this.#scanTimeoutMs
@@ -300,7 +311,7 @@ export class NobleTransport implements TrikiTransport {
       this.#checkCancelled(attempt);
       return { noble, attempt, deadline };
     } catch (err) {
-      this.#attempt = null;
+      if (this.#attempt === attempt) this.#attempt = null;
       throw err;
     }
   }
@@ -309,11 +320,15 @@ export class NobleTransport implements TrikiTransport {
     if (attempt.cancelled) throw new ConnectAbortedError("Disconnected while connecting.");
   }
 
-  /** Failure path of an attempt: drop any half-open link, reset session state. */
-  #abortAttempt(): void {
-    const peripheral = this.#peripheral;
+  /**
+   * Failure path of an attempt: drop the half-open link it created (session state was
+   * never committed, so no instance teardown — and our `disconnect` listener was never
+   * attached, so noble's own `disconnectAsync` resolver survives untouched).
+   */
+  #abortAttempt(attempt: ConnectAttempt): void {
+    const peripheral = attempt.peripheral;
+    attempt.peripheral = null;
     if (peripheral) void peripheral.disconnectAsync().catch(() => {});
-    this.#teardown();
   }
 
   /**
@@ -366,31 +381,33 @@ export class NobleTransport implements TrikiTransport {
    * Scan until a matching peripheral appears. Every exit — match, timeout, cancel,
    * or a startScanning failure — removes the `discover` listener and stops scanning,
    * so retried connects never stack listeners on the (module-level) noble emitter.
+   * The match path additionally AWAITS the scan stop before resolving: initiating an
+   * LE connection while the scan is still active is rejected by some stacks
+   * (Linux/BlueZ "Command Disallowed").
    */
   #scan(noble: Noble, attempt: ConnectAttempt, deadline: number): Promise<NoblePeripheral> {
     return new Promise<NoblePeripheral>((resolve, reject) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       let settled = false;
-      const cleanup = (): void => {
+      const cleanup = (): Promise<void> => {
         settled = true;
         noble.removeListener("discover", onDiscover);
         if (timer !== undefined) clearTimeout(timer);
         attempt.fail = null;
-        void noble.stopScanningAsync().catch(() => {});
+        return noble.stopScanningAsync().catch(() => {});
       };
       const onDiscover = (peripheral: NoblePeripheral): void => {
-        if (!this.#matches(peripheral)) return;
-        cleanup();
-        resolve(peripheral);
+        if (settled || !this.#matches(peripheral)) return;
+        void cleanup().then(() => resolve(peripheral));
       };
       attempt.fail = (err) => {
-        cleanup();
+        void cleanup();
         reject(err);
       };
       const remaining = deadline - Date.now();
       if (Number.isFinite(remaining)) {
         timer = setTimeout(() => {
-          cleanup();
+          void cleanup();
           const target = this.#address
             ? `address "${this.#address}"`
             : `name prefix "${this.#namePrefixLower.toUpperCase()}"`;
@@ -402,23 +419,31 @@ export class NobleTransport implements TrikiTransport {
         }, Math.max(0, remaining));
       }
       noble.on("discover", onDiscover);
-      noble.startScanningAsync(this.#scanServiceUuids, false).catch((err) => {
+      // allowDuplicates=true: the advertised name often arrives only in the scan
+      // response, and with duplicate filtering noble emits 'discover' once per
+      // peripheral per scan — a first report without localName would make the token
+      // unmatchable for the rest of the scan.
+      noble.startScanningAsync(this.#scanServiceUuids, true).catch((err) => {
         if (!settled) {
-          cleanup();
+          void cleanup();
           reject(err);
         }
       });
     });
   }
 
-  /** Connect + discover + subscribe on a known peripheral. Shared by (re)connect. */
+  /**
+   * Connect + discover + subscribe on a known peripheral. Shared by (re)connect.
+   * Session state is built in locals and committed to the instance only once every
+   * step has succeeded — a failed or cancelled attempt never leaves half-built state
+   * behind, and cannot clobber a newer attempt's session.
+   */
   async #openSession(
     peripheral: NoblePeripheral,
     attempt: ConnectAttempt,
     deadline: number,
   ): Promise<void> {
-    this.#peripheral = peripheral;
-    peripheral.once("disconnect", this.#onPeripheralDisconnect);
+    attempt.peripheral = peripheral;
 
     await this.#race(peripheral.connectAsync(), attempt, deadline, "Connecting to the device");
     this.#checkCancelled(attempt);
@@ -436,18 +461,35 @@ export class NobleTransport implements TrikiTransport {
       "Service discovery",
     );
     this.#checkCancelled(attempt);
-    this.#rxChar = characteristics.find((c) => c.uuid === NUS_RX_ID) ?? null;
-    this.#txChar = characteristics.find((c) => c.uuid === NUS_TX_ID) ?? null;
-    this.#ctrlChar = characteristics.find((c) => c.uuid === NUS_CTRL_ID) ?? null;
+    const rx = characteristics.find((c) => c.uuid === NUS_RX_ID) ?? null;
+    const tx = characteristics.find((c) => c.uuid === NUS_TX_ID) ?? null;
+    const ctrl = characteristics.find((c) => c.uuid === NUS_CTRL_ID) ?? null;
     const battChar = characteristics.find((c) => c.uuid === BATTERY_LEVEL_ID) ?? null;
-    if (!this.#rxChar || !this.#txChar) {
+    if (!rx || !tx) {
       throw new Error("Triki NUS RX/TX characteristics not found on the device.");
     }
 
-    this.#txChar.on("data", (data) => this.#handlers?.onFrame(data));
-    await this.#race(this.#txChar.subscribeAsync(), attempt, deadline, "TX subscription");
+    // Session-guarded: buffered notifications can still arrive after teardown, and
+    // the handlers contract promises no onFrame after onDisconnect.
+    tx.on("data", (data) => {
+      if (this.#txChar === tx && this.#sessionActive) this.#handlers?.onFrame(data);
+    });
+    await this.#race(tx.subscribeAsync(), attempt, deadline, "TX subscription");
     this.#checkCancelled(attempt);
 
+    // Commit: from here on this is the live session.
+    this.#peripheral = peripheral;
+    this.#rxChar = rx;
+    this.#txChar = tx;
+    this.#ctrlChar = ctrl;
+    peripheral.once("disconnect", this.#onPeripheralDisconnect);
+    let rejectDropped!: (err: Error) => void;
+    const dropped = new Promise<never>((_, rej) => {
+      rejectDropped = rej;
+    });
+    dropped.catch(() => {}); // pre-handled so an idle session's teardown never surfaces it
+    this.#dropped = dropped;
+    this.#rejectDropped = rejectDropped;
     this.#sessionActive = true;
     // Fire-and-forget: battery must never delay connect() or the START command.
     void this.#startBattery(battChar, peripheral);
@@ -502,8 +544,38 @@ export class NobleTransport implements TrikiTransport {
     });
   }
 
+  /**
+   * Bound a write: noble never settles pending GATT callbacks once the link drops,
+   * so race the session's teardown signal and the shared time budget.
+   */
+  #boundedWrite(work: Promise<void>): Promise<void> {
+    work.catch(() => {}); // injected noble modules may reject after we settle
+    const dropped = this.#dropped ?? Promise.reject(new Error("Not connected."));
+    if (!this.#dropped) dropped.catch(() => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      if (Number.isFinite(this.#scanTimeoutMs)) {
+        timer = setTimeout(
+          () => reject(new ScanTimeoutError(`GATT write timed out after ${this.#scanTimeoutMs}ms.`)),
+          this.#scanTimeoutMs,
+        );
+      }
+    });
+    timeout.catch(() => {});
+    return Promise.race([work, dropped, timeout]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
+  }
+
   #matches(peripheral: NoblePeripheral): boolean {
-    if (this.#address) return peripheral.address?.toLowerCase() === this.#address;
+    if (this.#address) {
+      // macOS/CoreBluetooth hides MAC addresses (noble reports ""), so match the
+      // stable peripheral id too.
+      return (
+        peripheral.address?.toLowerCase() === this.#address ||
+        peripheral.id?.toLowerCase() === this.#address
+      );
+    }
     const name = peripheral.advertisement?.localName ?? "";
     return name.toLowerCase().startsWith(this.#namePrefixLower);
   }
@@ -516,17 +588,22 @@ export class NobleTransport implements TrikiTransport {
   /** Tear the active session down and fire onDisconnect — structurally exactly once:
    *  #teardown removes the peripheral's disconnect listener before the handler runs. */
   #finishSession(): void {
-    this.#sessionActive = false;
     this.#teardown();
     this.#handlers?.onDisconnect();
   }
 
   #teardown(): void {
     this.#sessionActive = false;
-    this.#peripheral?.removeAllListeners("disconnect");
-    // Characteristic 'data' listeners are intentionally not removed: noble builds
-    // fresh Characteristic instances on every discovery, so old listeners die with
-    // the old objects.
+    // Remove ONLY our own listener: the peripheral object is cached module-globally
+    // by noble and may carry listeners owned by other code (removeListener works on
+    // once()-wrapped listeners by original reference).
+    this.#peripheral?.removeListener("disconnect", this.#onPeripheralDisconnect);
+    // Characteristic 'data' listeners are left attached but session-guarded: noble
+    // builds fresh Characteristic instances on every discovery, and the guards drop
+    // anything that arrives after this point.
+    this.#rejectDropped?.(new Error("Disconnected."));
+    this.#rejectDropped = null;
+    this.#dropped = null;
     this.#rxChar = null;
     this.#txChar = null;
     this.#ctrlChar = null;

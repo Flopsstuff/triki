@@ -25,10 +25,11 @@ export class FakeNobleCharacteristic {
   writes: { data: Uint8Array; withoutResponse: boolean }[] = [];
   subscribeCount = 0;
   readValue: Uint8Array;
-  /** Test hooks: gate/fail the next readAsync/subscribeAsync. */
+  /** Test hooks: gate/fail the next readAsync/subscribeAsync/writeAsync. */
   readGate: Promise<void> | null = null;
   readError: Error | null = null;
   subscribeError: Error | null = null;
+  writeGate: Promise<void> | null = null;
 
   #dataListeners = new Set<(data: Uint8Array, isNotification: boolean) => void>();
 
@@ -38,6 +39,7 @@ export class FakeNobleCharacteristic {
   }
 
   async writeAsync(data: Uint8Array, withoutResponse: boolean): Promise<void> {
+    if (this.writeGate) await this.writeGate;
     this.writes.push({ data, withoutResponse });
   }
 
@@ -87,6 +89,8 @@ export class FakeNoblePeripheral {
   connectCount = 0;
   disconnectAsyncCount = 0;
   discoverCalls: { serviceUuids: string[]; characteristicUuids: string[] }[] = [];
+  /** Shared operation-order log (wired to FakeNoble.log by makeFakeNoble). */
+  log: string[] = [];
 
   /** Test hooks applied to the next operation / next discovery's fresh chars. */
   connectGate: Promise<void> | null = null;
@@ -120,6 +124,7 @@ export class FakeNoblePeripheral {
 
   async connectAsync(): Promise<void> {
     this.connectCount++;
+    this.log.push("connect");
     if (this.connectGate) await this.connectGate;
     if (this.connectError) throw this.connectError;
   }
@@ -160,6 +165,12 @@ export class FakeNoblePeripheral {
 
   once(event: "disconnect", listener: () => void): this {
     if (event === "disconnect") this.#disconnectListeners.add(listener);
+    return this;
+  }
+
+  /** Remove one listener by reference (like Node's EventEmitter with once-wrapping). */
+  removeListener(event: "disconnect", listener: () => void): this {
+    if (event === "disconnect") this.#disconnectListeners.delete(listener);
     return this;
   }
 
@@ -229,8 +240,12 @@ export class FakeNoble {
     if (peripheral) void microtask().then(() => this.discover(peripheral));
   }
 
+  /** Shared operation-order log (peripherals push "connect", scans push "stopScan"). */
+  readonly log: string[] = [];
+
   async stopScanningAsync(): Promise<void> {
     this.stopScanCount++;
+    this.log.push("stopScan");
     if (this.stopScanError) throw this.stopScanError;
     this.scanning = false;
   }
@@ -261,6 +276,7 @@ export interface FakeNobleHandles {
 export function makeFakeNoble(options: FakeNobleOptions = {}): FakeNobleHandles {
   const noble = new FakeNoble(options.state ?? "poweredOn");
   const peripheral = new FakeNoblePeripheral(options);
+  peripheral.log = noble.log; // one shared operation-order log
   if (options.autoDiscover ?? true) noble.autoDiscoverPeripheral = peripheral;
   return { noble, peripheral };
 }

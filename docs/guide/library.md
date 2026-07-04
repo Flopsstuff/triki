@@ -126,10 +126,11 @@ interface OrientationEvent {
 
 | Member | Description |
 |---|---|
-| `static isSupported()` | `true` when `navigator.bluetooth` exists (SSR-safe). |
+| `static isSupported()` | `true` when `navigator.bluetooth` exists (SSR-safe). Only about the **default** Web Bluetooth transport — in Node with `NobleTransport` just call `connect()`. |
 | `connect()` | Show the picker, connect, start streaming. User gesture required. |
 | `reconnect()` | Reconnect to the last paired device without the picker. |
 | `disconnect()` | Disconnect. Idempotent; safe in any state — cancels a pending `connect()`. |
+| `dispose()` | Disconnect, release the transport (another controller may then attach), drop all listeners. |
 | `setLed(on)` | Green LED on/off (throws if the token has no LED characteristic). |
 | `setRate(hz)` | Set the sample rate; applied live when streaming. |
 | `resetHeading()` | Re-zero yaw (no-op when fusion is off). |
@@ -184,16 +185,16 @@ prompts the terminal (or your IDE) for Bluetooth access.
 | Option | Default | Meaning |
 |---|---|---|
 | `namePrefix` | `"TRIKI"` | match devices whose advertised name starts with this prefix (case-insensitive) |
-| `address` | — | match a specific BLE address instead of by name |
+| `address` | — | match a specific BLE address **or noble peripheral id** instead of by name (macOS hides MAC addresses — use the id there) |
 | `noble` | `@abandonware/noble` | a noble-API-compatible module to use instead |
-| `scanTimeoutMs` | `15000` | budget for adapter power-on + scan + link setup; `Infinity` to wait forever |
+| `scanTimeoutMs` | `15000` | budget for adapter power-on + scan + link setup (writes share it too); `Infinity` to wait forever |
 | `scanServiceUuids` | `[]` | advertised-service filter for the scan (e.g. `[NUS_SERVICE]`); empty scans everything |
 
 The whole connect attempt shares the `scanTimeoutMs` budget and rejects with a
 **`ScanTimeoutError`** when it runs out; `disconnect()` during a pending `connect()`
-rejects it with a **`ConnectAbortedError`** (both exported from
-`triki-controller/node`). `reconnect()` re-links to the exact peripheral of the
-previous successful `connect()` — no scan, so with several tokens in range it can
+rejects it with a **`ConnectAbortedError`** (both exported from the main entry and
+`triki-controller/node`). `reconnect()` re-links to the exact peripheral matched by
+the previous `connect()` scan — no new scan, so with several tokens in range it can
 never silently attach to a different one.
 
 ::: warning Native build

@@ -41,6 +41,9 @@ export class FakeTransport implements TrikiTransport {
   disconnectCount = 0;
 
   #cancelPending: ((err: Error) => void) | null = null;
+  /** Set by disconnect() while a gated connect is pending — checked after the race,
+   *  so a cancel that lost the race (gate resolved first, same tick) still lands. */
+  #pendingCancelled = false;
 
   attach(handlers: TrikiTransportHandlers): void {
     if (this.handlers) throw new Error("FakeTransport is already attached.");
@@ -64,6 +67,7 @@ export class FakeTransport implements TrikiTransport {
   async #establish(): Promise<void> {
     if (this.connectError) throw this.connectError;
     if (this.connectGate) {
+      this.#pendingCancelled = false;
       await Promise.race([
         this.connectGate,
         new Promise<never>((_, reject) => {
@@ -71,6 +75,7 @@ export class FakeTransport implements TrikiTransport {
         }),
       ]);
       this.#cancelPending = null;
+      if (this.#pendingCancelled) throw new Error("Connection cancelled by disconnect().");
     }
     this.connected = true;
   }
@@ -87,6 +92,7 @@ export class FakeTransport implements TrikiTransport {
   disconnect(): void {
     this.disconnectCount++;
     if (this.#cancelPending) {
+      this.#pendingCancelled = true;
       const cancel = this.#cancelPending;
       this.#cancelPending = null;
       cancel(new Error("Connection cancelled by disconnect()."));

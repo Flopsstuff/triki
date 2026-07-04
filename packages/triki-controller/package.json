@@ -68,7 +68,7 @@
     "vitest": "^4.1.9"
   },
   "peerDependencies": {
-    "@abandonware/noble": "^1.9.2-26"
+    "@abandonware/noble": ">=1.9.2-26 <2.0.0"
   },
   "peerDependenciesMeta": {
     "@abandonware/noble": {

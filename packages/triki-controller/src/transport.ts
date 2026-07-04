@@ -4,7 +4,7 @@
  * A transport is a dumb Nordic UART Service (NUS) pipe: it connects to the device,
  * writes command bytes to RX, exposes the optional control (LED) characteristic, and
  * streams TX notification bytes back. It knows nothing about the Triki protocol — the
- * {@link TrikiController} builds the START/LED commands and parses the motion frames —
+ * `TrikiController` builds the START/LED commands and parses the motion frames —
  * so protocol logic lives in exactly one place and new transports stay tiny.
  *
  * Ownership is explicit: the controller claims a transport with {@link
@@ -15,6 +15,22 @@
  * `TrikiController` defaults to a `WebBluetoothTransport` (browser). A `NobleTransport`
  * (Node, via `@abandonware/noble`) is available from the `triki-controller/node` entry.
  */
+
+/** A connect attempt ran out of its time budget before the device was streaming. */
+export class ScanTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ScanTimeoutError";
+  }
+}
+
+/** `disconnect()` was called while a `connect()`/`reconnect()` was still pending. */
+export class ConnectAbortedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConnectAbortedError";
+  }
+}
 
 /** Callbacks a {@link TrikiTransport} owner registers via {@link TrikiTransport.attach}. */
 export interface TrikiTransportHandlers {
@@ -72,7 +88,7 @@ export interface TrikiTransport {
   /**
    * Reconnect to the previously selected device without re-prompting. Optional —
    * transports that cannot remember a device may omit it, in which case
-   * {@link TrikiController.reconnect} rejects with a clear error. Same contract as
+   * `TrikiController.reconnect` rejects with a clear error. Same contract as
    * {@link connect}.
    */
   reconnect?(): Promise<void>;

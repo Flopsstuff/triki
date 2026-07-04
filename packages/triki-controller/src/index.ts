@@ -26,6 +26,7 @@ export {
   SUPPORTED_RATES_HZ,
 } from "./protocol";
 
+export { ScanTimeoutError, ConnectAbortedError } from "./transport";
 export type { TrikiTransport, TrikiTransportHandlers } from "./transport";
 export type { Quaternion, EulerAngles, MadgwickOptions, OrientationFilter } from "./fusion";
 export type { VqfOptions } from "./vqf";

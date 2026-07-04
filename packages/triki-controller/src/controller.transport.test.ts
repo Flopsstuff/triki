@@ -234,6 +234,60 @@ describe("reconnect through the transport", () => {
   });
 });
 
+describe("re-entrant listeners (review regressions)", () => {
+  const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+
+  test("an auto-retry from the 'disconnected' listener is not cancelled by the failed attempt", async () => {
+    const { ctrl, t } = rig();
+    t.writeRxError = new Error("START failed");
+    let retried = false;
+    ctrl.on("connectionchange", (s) => {
+      if (s === "disconnected" && !retried) {
+        retried = true;
+        t.writeRxError = null;
+        void ctrl.reconnect(); // classic auto-reconnect, synchronously in the handler
+      }
+    });
+
+    await expect(ctrl.connect()).rejects.toThrow("START failed");
+    await flush();
+    expect(ctrl.state).toBe("streaming"); // the retry survived the original catch
+  });
+
+  test("disconnect()'s fallback does not clobber a connect() started from the listener", async () => {
+    const { ctrl, t } = rig();
+    await ctrl.connect();
+    let retried = false;
+    ctrl.on("connectionchange", (s) => {
+      if (s === "disconnected" && !retried) {
+        retried = true;
+        void ctrl.connect(); // re-enter synchronously during disconnect()'s emit
+      }
+    });
+
+    ctrl.disconnect();
+    await flush();
+    expect(ctrl.state).toBe("streaming");
+    expect(t.connectCount).toBe(2);
+  });
+});
+
+describe("dispose", () => {
+  test("releases the transport so another controller can attach", async () => {
+    const t = new FakeTransport();
+    const first = make({ fusion: "none", transport: t });
+    await first.connect();
+
+    first.dispose();
+    expect(first.state).toBe("disconnected");
+    expect(t.handlers).toBeNull();
+
+    const second = make({ fusion: "none", transport: t });
+    await second.connect();
+    expect(second.state).toBe("streaming");
+  });
+});
+
 describe("transport ownership and validation", () => {
   test("the constructor rejects a malformed transport with a member list", () => {
     expect(() => make({ transport: {} as unknown as TrikiTransport })).toThrow(TypeError);
