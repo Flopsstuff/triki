@@ -7,5 +7,5 @@
  * never imports noble.
  */
 export * from "./index";
-export { NobleTransport } from "./transports/noble";
+export { NobleTransport, ScanTimeoutError, ConnectAbortedError, nobleUuid } from "./transports/noble";
 export type { NobleTransportOptions } from "./transports/noble";
